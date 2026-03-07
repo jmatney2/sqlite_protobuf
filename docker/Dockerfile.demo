@@ -1,0 +1,53 @@
+# Demo container: runs the Django demo app on CentOS 7 (glibc 2.17) using
+# the pre-built django-sqlite-protobuf wheel.
+#
+# Prerequisites (run from repo root):
+#   task build:centos7   # builds libsqlite_protobuf.so → libs/
+#   task wheel           # packages it into dist/*.whl
+#
+# Then build and run:
+#   task demo:centos7    # builds this image and starts the server
+#
+# Or manually:
+#   docker build -f docker/Dockerfile.demo -t sqlite-protobuf-demo .
+#   docker run --rm -p 8000:8000 sqlite-protobuf-demo
+
+FROM centos:7
+
+# CentOS 7 reached EOL June 2024 — redirect to the vault mirrors.
+RUN sed -i \
+        -e 's/mirrorlist=/#mirrorlist=/g' \
+        -e 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' \
+        /etc/yum.repos.d/CentOS-*.repo
+
+RUN yum install -y wget tar && yum clean all
+
+# ── Python (standalone build, explicitly supports glibc >= 2.17) ──────────────
+COPY docker/scripts/install-python.sh /build-scripts/
+RUN chmod +x /build-scripts/install-python.sh
+
+ARG PYTHON_VERSION=3.12.8
+ARG PYTHON_BUILD=20241219
+RUN PYTHON_VERSION=${PYTHON_VERSION} PYTHON_BUILD=${PYTHON_BUILD} \
+        /build-scripts/install-python.sh
+
+ENV PATH="/usr/local/python/bin:${PATH}"
+
+# ── Install the wheel ─────────────────────────────────────────────────────────
+# The wheel bundles libsqlite_protobuf.so; no SQLITE_PROTOBUF_EXTENSION needed.
+COPY dist/ /tmp/dist/
+RUN pip3 install /tmp/dist/django_sqlite_protobuf-*.whl \
+    && rm -rf /tmp/dist/
+
+# ── Demo application ──────────────────────────────────────────────────────────
+COPY demo/ /app/
+WORKDIR /app
+
+# Install the demo's own dependencies (django-sqlite-protobuf already installed above).
+RUN pip3 install "django>=4.2" "protobuf>=5.0"
+
+COPY docker/scripts/demo-start.sh /start.sh
+RUN chmod +x /start.sh
+
+EXPOSE 8000
+CMD ["/start.sh"]

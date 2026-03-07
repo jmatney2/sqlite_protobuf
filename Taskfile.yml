@@ -1,0 +1,176 @@
+version: "3"
+
+vars:
+  USER_ID:
+    sh: id -u
+  GROUP_ID:
+    sh: id -g
+  EXT_NAME: libsqlite_protobuf
+  EXT_SUFFIX:
+    sh: if [ "$(uname)" = "Darwin" ]; then echo ".dylib"; else echo ".so"; fi
+  EXT: "target/release/{{.EXT_NAME}}{{.EXT_SUFFIX}}"
+  PACKAGE_LIB_DIR: django_sqlite_protobuf/django_sqlite_protobuf/libs
+  DEMO_DESCRIPTOR: demo/people/descriptors/test.pb
+
+tasks:
+  # ---------------------------------------------------------------------------
+  # Build
+  # ---------------------------------------------------------------------------
+  build:
+    desc: Compile the Rust extension
+    cmds:
+      - cargo build --release
+    sources:
+      - src/**/*.rs
+      - Cargo.toml
+      - Cargo.lock
+      - build.rs
+    generates:
+      - "{{.EXT}}"
+
+  # ---------------------------------------------------------------------------
+  # Tests
+  # ---------------------------------------------------------------------------
+  test:
+    desc: Run all tests (Rust + Python)
+    deps: [test:rust, test:python]
+
+  test:rust:
+    desc: Run Rust unit tests
+    cmds:
+      - cargo test
+
+  test:python:
+    desc: Run Python integration tests
+    deps: [build]
+    cmds:
+      - uv run pytest -v
+
+  # ---------------------------------------------------------------------------
+  # Demo
+  # ---------------------------------------------------------------------------
+  demo:descriptor:
+    desc: Compile test.proto to a binary FileDescriptorSet for the demo
+    cmds:
+      - mkdir -p demo/people/descriptors
+      - protoc -Iproto --descriptor_set_out={{.DEMO_DESCRIPTOR}} --include_imports proto/test.proto
+    sources:
+      - proto/test.proto
+    generates:
+      - "{{.DEMO_DESCRIPTOR}}"
+
+  demo:setup:
+    desc: Install demo dependencies and run migrations
+    deps: [demo:descriptor]
+    cmds:
+      - cmd: cd demo && uv sync
+      - cmd: cd demo && uv run python manage.py migrate
+
+  demo:
+    desc: Start the demo Django dev server (http://127.0.0.1:8000/)
+    deps: [build, demo:setup]
+    cmds:
+      - cd demo && uv run python manage.py runserver
+
+  # ---------------------------------------------------------------------------
+  # Cross-compilation — copies .so into the django_sqlite_protobuf wheel tree
+  #
+  # CentOS 7 / RHEL ≤ 7 (glibc 2.17): build:centos7  or  build:linux-musl
+  # RHEL 8 / 9+, modern Linux:         build:linux-gnu
+  # Any Linux (static, no glibc dep):  build:linux-musl   ← safest to ship
+  # ---------------------------------------------------------------------------
+  build:linux-musl:
+    desc: Statically-linked musl build (runs on any Linux, including CentOS 7)
+    summary: |
+      Requires:
+        rustup target add x86_64-unknown-linux-musl
+        apt/dnf install musl-tools
+    cmds:
+      - cargo build --release --target x86_64-unknown-linux-musl
+      - mkdir -p {{.PACKAGE_LIB_DIR}}/x86_64-unknown-linux-musl
+      - cp target/x86_64-unknown-linux-musl/release/{{.EXT_NAME}}.so
+          {{.PACKAGE_LIB_DIR}}/x86_64-unknown-linux-musl/
+
+  build:linux-gnu:
+    desc: glibc build for RHEL 9+ and modern Linux distributions
+    cmds:
+      - cargo build --release --target x86_64-unknown-linux-gnu
+      - mkdir -p {{.PACKAGE_LIB_DIR}}/x86_64-unknown-linux-gnu
+      - cp target/x86_64-unknown-linux-gnu/release/{{.EXT_NAME}}.so
+          {{.PACKAGE_LIB_DIR}}/x86_64-unknown-linux-gnu/
+
+  build:centos7:
+    desc: Build inside a manylinux2014 Docker container (glibc 2.17, CentOS 7 compatible)
+    summary: |
+      Requires Docker.  Builds a dedicated image (sqlite-protobuf-builder) that
+      compiles protoc 3.21.x and Rust from source, then cross-compiles the
+      extension against glibc 2.17.  The resulting binary runs on CentOS 7,
+      RHEL 7+, and all newer Linux distributions.
+
+      First run builds the image and takes several minutes; subsequent runs use
+      the Docker layer cache and are much faster.
+    cmds:
+      - docker build
+          -f docker/Dockerfile.centos7
+          -t sqlite-protobuf-builder
+          .
+      - docker run --rm
+          -v "{{.ROOT_DIR}}:/workspace"
+          -e HOST_UID={{.USER_ID}}
+          -e HOST_GID={{.GROUP_ID}}
+          sqlite-protobuf-builder
+      - mkdir -p {{.PACKAGE_LIB_DIR}}/x86_64-unknown-linux-gnu
+      - mv target/release/{{.EXT_NAME}}.so {{.PACKAGE_LIB_DIR}}/x86_64-unknown-linux-gnu/{{.EXT_NAME}}.so
+
+  # ---------------------------------------------------------------------------
+  # Python wheel
+  # ---------------------------------------------------------------------------
+  wheel:
+    desc: Build the django-sqlite-protobuf wheel (run a build:* task first)
+    summary: |
+      Packages django_sqlite_protobuf/ (including whatever .so files are
+      already in libs/) into a wheel under dist/.
+
+      Typical workflow:
+        task build:centos7   # compile .so → libs/x86_64-unknown-linux-gnu/
+        task wheel           # package into dist/*.whl
+    cmds:
+      - mkdir -p dist
+      - uv build --wheel --directory django_sqlite_protobuf --out-dir ../dist
+    sources:
+      - django_sqlite_protobuf/**
+    generates:
+      - dist/django_sqlite_protobuf-*.whl
+
+  # ---------------------------------------------------------------------------
+  # Containerised demo (CentOS 7)
+  # ---------------------------------------------------------------------------
+  demo:centos7:
+    desc: Build and run the demo in a CentOS 7 Docker container
+    summary: |
+      Demonstrates that the wheel (with bundled libsqlite_protobuf.so) works
+      on a stock CentOS 7 / glibc 2.17 system.
+
+      Full workflow from scratch:
+        task build:centos7   # compile .so inside manylinux2014 container
+        task wheel           # package into dist/*.whl
+        task demo:centos7    # build the demo image and start the server
+
+      The server is available at http://localhost:8000/ while the container runs.
+      Press Ctrl-C to stop.
+    cmds:
+      - docker build
+          -f docker/Dockerfile.demo
+          -t sqlite-protobuf-demo
+          .
+      - docker run --rm -p 8000:8000 sqlite-protobuf-demo
+
+  # ---------------------------------------------------------------------------
+  # Housekeeping
+  # ---------------------------------------------------------------------------
+  clean:
+    desc: Remove build artefacts
+    cmds:
+      - cargo clean
+      - rm -f {{.DEMO_DESCRIPTOR}}
+      - rm -rf dist/

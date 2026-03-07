@@ -1,0 +1,19 @@
+# Exclude large Rust build artifacts from the Docker build context.
+target/
+
+# Git history
+.git/
+
+# Python caches
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+
+# Dev database — the demo container creates its own fresh one at startup.
+demo/db.sqlite3
+
+# uv lockfiles and virtual environments aren't needed in the image.
+uv.lock
+demo/uv.lock
+.venv/
+demo/.venv/

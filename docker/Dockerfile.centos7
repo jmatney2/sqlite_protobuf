@@ -1,0 +1,63 @@
+# Builder image for a CentOS 7 / glibc 2.17 compatible release of
+# libsqlite_protobuf.so.
+#
+# The resulting binary links against glibc 2.17 and runs on:
+#   CentOS 7, RHEL 7+, RHEL 8, RHEL 9, and modern Linux distributions.
+#
+# Named stages let you inspect any intermediate layer:
+#   docker build --target cmake    -f docker/Dockerfile.centos7 -t pb-builder-cmake    . && docker run --rm -it pb-builder-cmake    bash
+#   docker build --target protobuf -f docker/Dockerfile.centos7 -t pb-builder-protobuf . && docker run --rm -it pb-builder-protobuf bash
+#   docker build --target rust     -f docker/Dockerfile.centos7 -t pb-builder-rust     . && docker run --rm -it pb-builder-rust     bash
+#
+# Full build + compile (done automatically by `task build:centos7`):
+#   docker build -f docker/Dockerfile.centos7 -t sqlite-protobuf-builder .
+#   docker run --rm -v "$PWD:/workspace" -e HOST_UID=$(id -u) -e HOST_GID=$(id -g) sqlite-protobuf-builder
+
+FROM quay.io/pypa/manylinux2014_x86_64 AS base
+
+RUN yum install -y \
+        wget \
+        make \
+        gcc \
+        gcc-c++ \
+        git \
+        llvm-toolset-7 \
+    && yum clean all
+
+COPY docker/scripts/ /build-scripts/
+RUN chmod +x /build-scripts/*.sh
+
+# ── cmake 3.28 ────────────────────────────────────────────────────────────────
+FROM base AS cmake
+
+# CentOS 7's cmake3 (3.17) is too old for protobuf 34.x which requires 3.22+.
+# manylinux2014 also ships a pip-installed cmake via pipx whose PATH entry
+# wins over /usr/local/bin — so we explicitly prepend /usr/local/bin here.
+ARG CMAKE_VERSION=4.2.3
+RUN CMAKE_VERSION=${CMAKE_VERSION} /build-scripts/install-cmake.sh
+ENV PATH="/usr/local/bin:${PATH}"
+
+# ── protobuf / protoc ─────────────────────────────────────────────────────────
+FROM cmake AS protobuf
+
+# cmake's FetchContent downloads abseil-cpp automatically when
+# -Dprotobuf_ABSL_PROVIDER=module is set.
+ARG PROTOBUF_VERSION=34.0
+RUN PROTOBUF_VERSION=${PROTOBUF_VERSION} /build-scripts/build-protobuf.sh
+
+# ── Rust (stable, minimal profile) ───────────────────────────────────────────
+FROM protobuf AS rust
+
+# RUST_MIN_STACK prevents SIGSEGV crashes in rustc during codegen in
+# resource-constrained container environments.
+ENV RUST_MIN_STACK=16777216
+RUN /build-scripts/install-rust.sh
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# ── default: compile the extension ───────────────────────────────────────────
+# Run as root so cargo can write to ~/.cargo and the build cache freely.
+# build-ext.sh chowns the output .so to HOST_UID:HOST_GID before exiting,
+# so the file is owned by the calling user on the host filesystem.
+FROM rust
+WORKDIR /workspace
+CMD ["/build-scripts/build-ext.sh"]

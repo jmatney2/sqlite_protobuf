@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package test;
+
+enum Status {
+    STATUS_UNKNOWN = 0;
+    STATUS_ACTIVE = 1;
+    STATUS_INACTIVE = 2;
+}
+
+message Address {
+    string street = 1;
+    string city = 2;
+    int32 zip_code = 3;
+    string country = 4;
+}
+
+message Person {
+    string name = 1;
+    int32 age = 2;
+    double score = 3;
+    bool active = 4;
+    bytes avatar = 5;
+    Address address = 6;
+    repeated string tags = 7;
+    map<string, int32> metadata = 8;
+    Status status = 9;
+    int64 created_at = 10;
+    optional string nickname = 11;
+    repeated Address previous_addresses = 12;
+    uint64 large_id = 13;
+    float temperature = 14;
+}
