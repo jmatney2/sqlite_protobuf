@@ -21,11 +21,8 @@ def _candidates() -> list[Path]:
         machine = "aarch64"
 
     if system == "Linux":
-        # Prefer the GNU/glibc build; fall back to the statically-linked musl
-        # build which is compatible with any Linux distribution (CentOS 7+).
         return [
             _LIBS_DIR / f"{machine}-unknown-linux-gnu" / "libsqlite_protobuf.so",
-            _LIBS_DIR / f"{machine}-unknown-linux-musl" / "libsqlite_protobuf.so",
         ]
     if system == "Darwin":
         return [

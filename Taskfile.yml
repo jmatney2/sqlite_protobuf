@@ -79,18 +79,6 @@ tasks:
   # RHEL 8 / 9+, modern Linux:         build:linux-gnu
   # Any Linux (static, no glibc dep):  build:linux-musl   ← safest to ship
   # ---------------------------------------------------------------------------
-  build:linux-musl:
-    desc: Statically-linked musl build (runs on any Linux, including CentOS 7)
-    summary: |
-      Requires:
-        rustup target add x86_64-unknown-linux-musl
-        apt/dnf install musl-tools
-    cmds:
-      - cargo build --release --target x86_64-unknown-linux-musl
-      - mkdir -p {{.PACKAGE_LIB_DIR}}/x86_64-unknown-linux-musl
-      - cp target/x86_64-unknown-linux-musl/release/{{.EXT_NAME}}.so
-          {{.PACKAGE_LIB_DIR}}/x86_64-unknown-linux-musl/
-
   build:linux-gnu:
     desc: glibc build for RHEL 9+ and modern Linux distributions
     cmds:
@@ -164,6 +152,24 @@ tasks:
           -t sqlite-protobuf-demo
           .
       - docker run --rm -p 8000:8000 sqlite-protobuf-demo
+
+  # ---------------------------------------------------------------------------
+  # Local CI — run before pushing
+  # ---------------------------------------------------------------------------
+  ci:
+    desc: Run all tests and build all release artifacts
+    summary: |
+      A local substitute for a GitLab/GitHub pipeline. Run before pushing:
+        task ci
+
+      Steps (in order):
+        1. test          — Rust unit tests + Python integration tests
+        2. build:centos7 — glibc 2.17 .so inside manylinux2014 (requires Docker)
+        3. wheel         — package the .so into a distributable Python wheel
+    cmds:
+      - task: test
+      - task: build:centos7
+      - task: wheel
 
   # ---------------------------------------------------------------------------
   # Housekeeping

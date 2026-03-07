@@ -24,7 +24,7 @@ demo/people/descriptors/
 # Django dev database
 demo/db.sqlite3
 
-# Pre-compiled native libraries (populated by build:* tasks, not committed)
+# Pre-compiled native libraries (populated by build:centos7 / build:linux-gnu, not committed)
 django_sqlite_protobuf/django_sqlite_protobuf/libs/
 
 # Virtual environments

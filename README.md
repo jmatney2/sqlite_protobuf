@@ -124,15 +124,18 @@ Build platform-specific libraries ahead of time and ship them inside the wheel.
 
 | Target | Command | Runs on |
 |---|---|---|
-| CentOS 7 / RHEL 7 (glibc 2.17) | `task build:centos7` | CentOS 7, RHEL 7+ |
+| CentOS 7 / RHEL 7 (glibc 2.17) | `task build:centos7` | CentOS 7, RHEL 7, RHEL 8, RHEL 9, any Linux |
 | RHEL 9 / modern Linux | `task build:linux-gnu` | glibc ≥ 2.34 |
-| Any Linux (musl, static) | `task build:linux-musl` | any Linux, including CentOS 7 |
 
 `build:centos7` builds inside a `manylinux2014` Docker container (glibc 2.17)
 and copies the result into `django_sqlite_protobuf/libs/x86_64-unknown-linux-gnu/`.
+Because it targets the oldest supported glibc, this binary also runs on all
+newer distributions — making it the recommended build for airgapped deployment.
 
-The musl build is statically linked and has no glibc dependency, making it
-the safest choice for cross-distro distribution.
+> **Note on musl:** Rust's `x86_64-unknown-linux-musl` target only supports
+> static binaries, not shared libraries (`cdylib`).  SQLite extensions must be
+> loadable `.so` files, so a musl build is not possible.  Use `build:centos7`
+> for maximum portability instead.
 
 ### 2. Build the wheel
 
