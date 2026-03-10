@@ -22,7 +22,7 @@ Example::
 
 from pathlib import Path
 
-from django.db.models import BinaryField, FloatField, Func, IntegerField, TextField
+from django.db.models import BinaryField, DateTimeField, FloatField, Func, IntegerField, TextField
 from django.db.models.expressions import Value
 
 
@@ -94,6 +94,46 @@ class ProtobufToJson(Func):
             output_field=TextField(),
             **kwargs,
         )
+
+
+class ProtobufTimestamp(Func):
+    """
+    Extracts an ``int64`` Unix-seconds field from a protobuf blob and returns
+    it as a Python ``datetime`` object.
+
+    Internally this renders as::
+
+        datetime(protobuf_extract(data, descriptor, message_type, path), 'unixepoch')
+
+    which SQLite converts to an ISO 8601 string that Django's ``DateTimeField``
+    can parse.  The result is a **naive** datetime (UTC implied).  If your
+    project uses ``USE_TZ = True`` wrap the queryset value with
+    ``django.utils.timezone.make_aware()`` or use ``Cast`` with a timezone-aware
+    expression.
+
+    Example::
+
+        from django_sqlite_protobuf.expressions import ProtobufTimestamp
+
+        qs = Event.objects.annotate(
+            created=ProtobufTimestamp("proto_data", DESCRIPTOR, "pkg.Event", "created_at"),
+        ).filter(created__gte=datetime(2024, 1, 1))
+    """
+
+    function = "datetime"
+    template = "%(function)s(%(expressions)s, 'unixepoch')"
+
+    def __init__(
+        self,
+        field,
+        descriptor: str | Path | bytes,
+        message_type: str,
+        path: str,
+        **kwargs,
+    ):
+        kwargs.setdefault("output_field", DateTimeField())
+        inner = ProtobufExtract(field, descriptor, message_type, path, output_field=IntegerField())
+        super().__init__(inner, **kwargs)
 
 
 class ProtobufValid(Func):

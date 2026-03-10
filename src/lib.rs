@@ -4,7 +4,10 @@ use prost_reflect::{DescriptorPool, DynamicMessage, MapKey, ReflectMessage, Valu
 use sha2::{Digest, Sha256};
 use sqlite_loadable::prelude::*;
 use sqlite_loadable::{api, define_scalar_function, Error, Result};
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::collections::hash_map::DefaultHasher;
 use std::sync::{Arc, Mutex};
 
 // ---------------------------------------------------------------------------
@@ -26,6 +29,79 @@ fn get_or_parse_descriptor(descriptor_bytes: &[u8]) -> Result<Arc<DescriptorPool
     let pool = Arc::new(pool);
     cache.insert(hash, Arc::clone(&pool));
     Ok(pool)
+}
+
+// ---------------------------------------------------------------------------
+// Per-row message cache
+// ---------------------------------------------------------------------------
+//
+// Extracting multiple fields from the same protobuf row (a common pattern)
+// would otherwise parse the binary N times — once per annotated field.
+// A thread-local single-entry cache keyed by (pool identity, message type,
+// data length + hash) makes every hit after the first a zero-cost clone.
+//
+// SQLite evaluates scalar functions for all columns of one row before moving
+// to the next, so a single cached entry covers the typical multi-field case.
+
+struct MessageCacheEntry {
+    pool_ptr: usize,
+    message_type: String,
+    data_len: usize,
+    data_hash: u64,
+    message: DynamicMessage,
+}
+
+thread_local! {
+    static MESSAGE_CACHE: RefCell<Option<MessageCacheEntry>> = const { RefCell::new(None) };
+}
+
+fn hash_data(data: &[u8]) -> u64 {
+    let mut h = DefaultHasher::new();
+    data.hash(&mut h);
+    h.finish()
+}
+
+/// Decode a `DynamicMessage`, returning a cached clone when the same
+/// (pool, message_type, data) triple is seen again within the same thread.
+fn get_or_decode_message(
+    pool: &Arc<DescriptorPool>,
+    message_type: &str,
+    data: &[u8],
+) -> Result<DynamicMessage> {
+    let pool_ptr = Arc::as_ptr(pool) as usize;
+    let data_len = data.len();
+    let data_hash = hash_data(data);
+
+    MESSAGE_CACHE.with(|cache| {
+        {
+            let cached = cache.borrow();
+            if let Some(entry) = cached.as_ref() {
+                if entry.pool_ptr == pool_ptr
+                    && entry.message_type == message_type
+                    && entry.data_len == data_len
+                    && entry.data_hash == data_hash
+                {
+                    return Ok(entry.message.clone());
+                }
+            }
+        }
+
+        let msg_desc = pool
+            .get_message_by_name(message_type)
+            .ok_or_else(|| Error::new_message(&format!("Unknown message type: {message_type}")))?;
+        let message = DynamicMessage::decode(msg_desc, data)
+            .map_err(|e| Error::new_message(&format!("Failed to decode message: {e}")))?;
+
+        *cache.borrow_mut() = Some(MessageCacheEntry {
+            pool_ptr,
+            message_type: message_type.to_owned(),
+            data_len,
+            data_hash,
+            message: message.clone(),
+        });
+
+        Ok(message)
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -128,41 +204,34 @@ fn value_to_json(value: &Value) -> serde_json::Value {
 /// Returns `Ok(None)` when the path resolves to nothing (field not present).
 /// Returns `Err` when the message type is unknown or the bytes cannot be decoded.
 fn extract_field(
-    pool: &DescriptorPool,
+    pool: &Arc<DescriptorPool>,
     message_type: &str,
     data: &[u8],
     field_path: &str,
 ) -> Result<Option<Value>> {
-    let msg_desc = pool
-        .get_message_by_name(message_type)
-        .ok_or_else(|| Error::new_message(&format!("Unknown message type: {message_type}")))?;
-    let msg = DynamicMessage::decode(msg_desc, data)
-        .map_err(|e| Error::new_message(&format!("Failed to decode message: {e}")))?;
+    let msg = get_or_decode_message(pool, message_type, data)?;
     Ok(get_value_by_path(&msg, field_path))
 }
 
 /// Return `true` when `data` is a valid encoding of the given message type.
 /// Returns `Err` when the message type is unknown; returns `Ok(false)` when the
 /// bytes are not a valid protobuf encoding.
-fn check_valid(pool: &DescriptorPool, message_type: &str, data: &[u8]) -> Result<bool> {
-    let msg_desc = pool
-        .get_message_by_name(message_type)
-        .ok_or_else(|| Error::new_message(&format!("Unknown message type: {message_type}")))?;
-    Ok(DynamicMessage::decode(msg_desc, data).is_ok())
+fn check_valid(pool: &Arc<DescriptorPool>, message_type: &str, data: &[u8]) -> Result<bool> {
+    // Reject unknown message types as an error (not just false).
+    if pool.get_message_by_name(message_type).is_none() {
+        return Err(Error::new_message(&format!("Unknown message type: {message_type}")));
+    }
+    Ok(get_or_decode_message(pool, message_type, data).is_ok())
 }
 
 /// Encode a message as its canonical proto3 JSON representation.
 /// Returns `Err` when the message type is unknown or the bytes cannot be decoded.
 fn to_json(
-    pool: &DescriptorPool,
+    pool: &Arc<DescriptorPool>,
     message_type: &str,
     data: &[u8],
 ) -> Result<serde_json::Value> {
-    let msg_desc = pool
-        .get_message_by_name(message_type)
-        .ok_or_else(|| Error::new_message(&format!("Unknown message type: {message_type}")))?;
-    let msg = DynamicMessage::decode(msg_desc, data)
-        .map_err(|e| Error::new_message(&format!("Failed to decode message: {e}")))?;
+    let msg = get_or_decode_message(pool, message_type, data)?;
     serde_json::to_value(&msg)
         .map_err(|e| Error::new_message(&format!("JSON serialization error: {e}")))
 }

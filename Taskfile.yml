@@ -140,6 +140,7 @@ tasks:
       on a stock CentOS 7 / glibc 2.17 system.
 
       Full workflow from scratch:
+        task demo:descriptor # compile test.proto to a binary FileDescriptorSet for the demo
         task build:centos7   # compile .so inside manylinux2014 container
         task wheel           # package into dist/*.whl
         task demo:centos7    # build the demo image and start the server
