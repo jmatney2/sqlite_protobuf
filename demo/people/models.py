@@ -11,6 +11,7 @@ class PersonRecord(models.Model):
 
     proto_data = models.BinaryField()
     inserted_at = models.DateTimeField(auto_now_add=True)
+    flagged = models.BooleanField(default=False)
 
     class Meta:
         ordering = ["-inserted_at"]

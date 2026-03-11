@@ -6,6 +6,7 @@ dependencies = [
     "django>=4.2",
     "protobuf>=5.0",
     "django-sqlite-protobuf",
+    "django-tables2>=2.7",
 ]
 
 [tool.uv.sources]

@@ -256,7 +256,25 @@ fn set_result_from_value(context: *mut sqlite3_context, value: &Value) -> Result
         Value::Message(m) => {
             let json_val = serde_json::to_value(m)
                 .map_err(|e| Error::new_message(&format!("JSON serialization error: {e}")))?;
-            api::result_json(context, json_val)?;
+            // Well-Known Types (Timestamp, Duration, StringValue, etc.) serialize
+            // as JSON primitives rather than objects.  Return them as the natural
+            // SQLite type so callers receive a plain string/number instead of a
+            // JSON-quoted value.  Regular nested messages fall through to JSON.
+            match json_val {
+                serde_json::Value::String(s) => api::result_text(context, &s)?,
+                serde_json::Value::Number(n) => {
+                    if let Some(i) = n.as_i64() {
+                        api::result_int64(context, i)
+                    } else if let Some(f) = n.as_f64() {
+                        api::result_double(context, f)
+                    } else {
+                        api::result_text(context, &n.to_string())?
+                    }
+                }
+                serde_json::Value::Bool(b) => api::result_bool(context, b),
+                serde_json::Value::Null => api::result_null(context),
+                other => api::result_json(context, other)?,
+            }
         }
         Value::List(_) | Value::Map(_) => {
             api::result_json(context, value_to_json(value))?;

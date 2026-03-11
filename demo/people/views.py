@@ -1,77 +1,19 @@
-import random
-import time
 from pathlib import Path
 
-from django.db.models import Avg, FloatField, IntegerField, JSONField
+from django.db.models import Avg, FloatField, IntegerField
 from django.shortcuts import redirect, render
 from django.views.decorators.http import require_POST
+from django_tables2 import RequestConfig
 
-from django_sqlite_protobuf.expressions import ProtobufExtract, ProtobufToJson
+from django_sqlite_protobuf.expressions import ProtobufExtract
 
 from .models import PersonRecord
 from .proto_helpers import make_random_person
-
-DESCRIPTOR = Path(__file__).parent / "descriptors" / "test.pb"
-MESSAGE = "test.Person"
+from .tables import DESCRIPTOR, MESSAGE, PersonTable
 
 
-def _annotated_queryset(filter_active=None, sort_by=None):
-    """Return a PersonRecord queryset with all proto fields annotated."""
+def _stats():
     qs = PersonRecord.objects.annotate(
-        name=ProtobufExtract("proto_data", DESCRIPTOR, MESSAGE, "name"),
-        age=ProtobufExtract(
-            "proto_data", DESCRIPTOR, MESSAGE, "age", output_field=IntegerField()
-        ),
-        score=ProtobufExtract(
-            "proto_data", DESCRIPTOR, MESSAGE, "score", output_field=FloatField()
-        ),
-        temperature=ProtobufExtract(
-            "proto_data", DESCRIPTOR, MESSAGE, "temperature", output_field=FloatField()
-        ),
-        active=ProtobufExtract(
-            "proto_data", DESCRIPTOR, MESSAGE, "active", output_field=IntegerField()
-        ),
-        status=ProtobufExtract(
-            "proto_data", DESCRIPTOR, MESSAGE, "status", output_field=IntegerField()
-        ),
-        city=ProtobufExtract("proto_data", DESCRIPTOR, MESSAGE, "address.city"),
-        nickname=ProtobufExtract("proto_data", DESCRIPTOR, MESSAGE, "nickname"),
-        tags=ProtobufExtract("proto_data", DESCRIPTOR, MESSAGE, "tags",
-                             output_field=JSONField()),
-    )
-
-    if filter_active is not None:
-        qs = qs.filter(active=1 if filter_active else 0)
-
-    sort_map = {
-        "name": "name",
-        "-name": "-name",
-        "age": "age",
-        "-age": "-age",
-        "score": "-score",   # default score sort: highest first
-    }
-    order = sort_map.get(sort_by, "-inserted_at")
-    return qs.order_by(order)
-
-
-STATUS_LABELS = {0: "Unknown", 1: "Active", 2: "Inactive"}
-
-
-def index(request):
-    filter_active = request.GET.get("active")
-    sort_by = request.GET.get("sort", "")
-
-    if filter_active == "1":
-        filter_active = True
-    elif filter_active == "0":
-        filter_active = False
-    else:
-        filter_active = None
-
-    people = _annotated_queryset(filter_active=filter_active, sort_by=sort_by)
-
-    # Aggregate stats across ALL records (no active filter applied here)
-    all_qs = PersonRecord.objects.annotate(
         _age=ProtobufExtract(
             "proto_data", DESCRIPTOR, MESSAGE, "age", output_field=IntegerField()
         ),
@@ -83,27 +25,47 @@ def index(request):
         ),
     )
     total = PersonRecord.objects.count()
-    active_count = all_qs.filter(_active=1).count()
-    agg = all_qs.aggregate(
-        avg_age=Avg("_age"), avg_score=Avg("_score")
-    )
-
-    stats = {
+    agg = qs.aggregate(avg_age=Avg("_age"), avg_score=Avg("_score"))
+    return {
         "total": total,
-        "active": active_count,
+        "active": qs.filter(_active=1).count(),
         "avg_age": round(agg["avg_age"] or 0, 1),
         "avg_score": round(agg["avg_score"] or 0, 2),
     }
+
+
+def index(request):
+    filter_active = request.GET.get("active")
+    qs = PersonRecord.objects.all()
+    if filter_active == "1":
+        qs = qs.filter(
+            pk__in=PersonRecord.objects.annotate(
+                _active=ProtobufExtract(
+                    "proto_data", DESCRIPTOR, MESSAGE, "active",
+                    output_field=IntegerField(),
+                )
+            ).filter(_active=1).values("pk")
+        )
+    elif filter_active == "0":
+        qs = qs.filter(
+            pk__in=PersonRecord.objects.annotate(
+                _active=ProtobufExtract(
+                    "proto_data", DESCRIPTOR, MESSAGE, "active",
+                    output_field=IntegerField(),
+                )
+            ).filter(_active=0).values("pk")
+        )
+
+    table = PersonTable(qs)
+    RequestConfig(request, paginate={"per_page": 25}).configure(table)
 
     return render(
         request,
         "people/index.html",
         {
-            "people": people,
-            "stats": stats,
-            "STATUS_LABELS": STATUS_LABELS,
+            "table": table,
+            "stats": _stats(),
             "filter_active": filter_active,
-            "sort_by": sort_by,
         },
     )
 

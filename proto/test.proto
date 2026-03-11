@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package test;
 
+import "google/protobuf/timestamp.proto";
+
 enum Status {
     STATUS_UNKNOWN = 0;
     STATUS_ACTIVE = 1;
@@ -30,4 +32,5 @@ message Person {
     repeated Address previous_addresses = 12;
     uint64 large_id = 13;
     float temperature = 14;
+    google.protobuf.Timestamp created_ts = 15;
 }

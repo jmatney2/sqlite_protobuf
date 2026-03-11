@@ -11,8 +11,11 @@ INSTALLED_APPS = [
     "django.contrib.contenttypes",
     "django.contrib.staticfiles",
     "django_sqlite_protobuf",
+    "django_tables2",
     "people",
 ]
+
+DJANGO_TABLES2_TEMPLATE = "django_tables2/bootstrap5.html"
 
 MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",

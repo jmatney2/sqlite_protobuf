@@ -84,6 +84,7 @@ def make_random_person() -> bytes:
     p.address.CopyFrom(_random_address(classes))
     p.status = random.choice([STATUS_UNKNOWN, STATUS_ACTIVE, STATUS_INACTIVE])
     p.created_at = int(time.time()) - random.randint(0, 365 * 24 * 3600)
+    p.created_ts.seconds = int(time.time()) - random.randint(0, 365 * 24 * 3600)
     p.large_id = random.randint(0, 2**48)
 
     num_tags = random.randint(1, 4)

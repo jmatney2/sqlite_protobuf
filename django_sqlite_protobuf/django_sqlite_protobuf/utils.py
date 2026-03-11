@@ -44,7 +44,9 @@ Example
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import re
+from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -70,8 +72,12 @@ class ProtoField:
         Dot-notation field path passed to ``protobuf_extract``, e.g.
         ``"address.city"`` or ``"tags[0]"``.
     output_field:
-        Django field instance that describes the Python type of the extracted
-        value.  Defaults to ``TextField()``.
+        Django field instance controlling the Python type of the extracted
+        value.  When omitted (``None``), the type is inferred automatically
+        from the compiled proto descriptor — ``IntegerField`` for integers and
+        bools, ``FloatField`` for float/double, ``DateTimeField`` for
+        ``google.protobuf.Timestamp``, ``JSONField`` for repeated fields and
+        nested messages, and ``TextField`` for everything else.
     verbose_name:
         Human-readable label used as the table column header.  Defaults to
         ``name`` with underscores replaced by spaces, title-cased.
@@ -79,12 +85,188 @@ class ProtoField:
 
     name: str
     path: str
-    output_field: models.Field = field(default_factory=models.TextField)
+    output_field: models.Field | None = None  # None → auto-detect from descriptor
     verbose_name: str = ""
 
     def __post_init__(self) -> None:
         if not self.verbose_name:
             self.verbose_name = self.name.replace("_", " ").title()
+
+
+# ---------------------------------------------------------------------------
+# Descriptor inspection helpers
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _FieldInfo:
+    """Internal: type metadata for a single proto field path."""
+    output_field: models.Field
+    is_bool: bool = False
+    is_enum: bool = False
+    is_timestamp: bool = False
+    enum_full_name: str = ""  # only set when is_enum=True
+
+
+@lru_cache(maxsize=32)
+def _load_pool(descriptor_bytes: bytes) -> object:
+    """Parse a FileDescriptorSet and return a populated DescriptorPool."""
+    from google.protobuf.descriptor_pb2 import FileDescriptorSet
+    from google.protobuf.descriptor_pool import DescriptorPool
+
+    fds = FileDescriptorSet()
+    fds.ParseFromString(descriptor_bytes)
+    pool = DescriptorPool()
+    for file_proto in fds.file:
+        pool.Add(file_proto)
+    return pool
+
+
+@lru_cache(maxsize=256)
+def _inspect_proto_field(
+    descriptor_bytes: bytes,
+    message_type: str,
+    field_path: str,
+) -> _FieldInfo | None:
+    """
+    Inspect a single proto field and return its type metadata.
+
+    Returns ``None`` if the path cannot be resolved (unknown message type or
+    field name).
+    """
+    pool = _load_pool(descriptor_bytes)
+    msg_desc = pool.FindMessageTypeByName(message_type)
+    if msg_desc is None:
+        return None
+
+    field_desc = None
+    last_has_index = False
+    segments = field_path.split(".")
+    for i, segment in enumerate(segments):
+        last_has_index = "[" in segment
+        name = segment.split("[")[0]
+        field_desc = msg_desc.fields_by_name.get(name)
+        if field_desc is None:
+            return None
+        # Navigate into the nested message for non-terminal segments.
+        if i < len(segments) - 1:
+            if field_desc.message_type is not None:
+                msg_desc = field_desc.message_type
+            else:
+                return None
+
+    if field_desc is None:
+        return None
+
+    # The UPB C extension (protobuf ≥ 4) exposes is_repeated and is_map as
+    # boolean properties rather than label/options inspection.
+    is_map = getattr(field_desc, "is_map_field", False) or (
+        field_desc.message_type is not None
+        and field_desc.message_type.GetOptions().map_entry
+    )
+    is_repeated = field_desc.is_repeated and not is_map and not last_has_index
+
+    if is_map or is_repeated:
+        return _FieldInfo(output_field=models.JSONField())
+
+    # TYPE_* constants live on the class but are accessible through the
+    # instance in both the pure-Python and UPB C-extension implementations.
+    fd_type = field_desc.type
+
+    if fd_type == field_desc.TYPE_BOOL:
+        return _FieldInfo(output_field=models.IntegerField(), is_bool=True)
+
+    if fd_type == field_desc.TYPE_ENUM:
+        return _FieldInfo(
+            output_field=models.IntegerField(),
+            is_enum=True,
+            enum_full_name=field_desc.enum_type.full_name,
+        )
+
+    if fd_type in (
+        field_desc.TYPE_INT32, field_desc.TYPE_SINT32,
+        field_desc.TYPE_FIXED32, field_desc.TYPE_SFIXED32,
+        field_desc.TYPE_INT64, field_desc.TYPE_SINT64,
+        field_desc.TYPE_FIXED64, field_desc.TYPE_SFIXED64,
+        field_desc.TYPE_UINT32, field_desc.TYPE_UINT64,
+    ):
+        return _FieldInfo(output_field=models.IntegerField())
+
+    if fd_type in (field_desc.TYPE_FLOAT, field_desc.TYPE_DOUBLE):
+        return _FieldInfo(output_field=models.FloatField())
+
+    if fd_type == field_desc.TYPE_MESSAGE:
+        if field_desc.message_type.full_name == "google.protobuf.Timestamp":
+            return _FieldInfo(output_field=models.DateTimeField(), is_timestamp=True)
+        return _FieldInfo(output_field=models.JSONField())
+
+    return _FieldInfo(output_field=models.TextField())
+
+
+def _descriptor_bytes(descriptor: str | Path | bytes) -> bytes:
+    """Normalise a descriptor argument to raw bytes."""
+    if isinstance(descriptor, (str, Path)):
+        return Path(descriptor).read_bytes()
+    return descriptor
+
+
+def _enum_auto_prefix(enum_full_name: str) -> str:
+    """
+    Derive the conventional proto enum value prefix from the enum type name.
+
+    Proto style is to prefix every enum value with the enum name in
+    SCREAMING_SNAKE_CASE.  For example ``Status`` → ``STATUS_``,
+    ``MyStatus`` → ``MY_STATUS_``.
+    """
+    simple = enum_full_name.rsplit(".", 1)[-1]
+    snake = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", simple).upper()
+    return snake + "_"
+
+
+@lru_cache(maxsize=64)
+def _enum_choices_cached(descriptor_bytes: bytes, enum_type: str, strip_prefix: str) -> dict[int, str]:
+    pool = _load_pool(descriptor_bytes)
+    enum_desc = pool.FindEnumTypeByName(enum_type)
+    result = {}
+    for value_desc in enum_desc.values:
+        name = value_desc.name
+        if strip_prefix and name.startswith(strip_prefix):
+            name = name[len(strip_prefix):]
+        result[value_desc.number] = name
+    return result
+
+
+def enum_choices_from_descriptor(
+    descriptor: str | Path | bytes,
+    enum_type: str,
+    strip_prefix: str = "",
+) -> dict[int, str]:
+    """
+    Return a ``{int: str}`` mapping of every value in a proto enum, suitable
+    for use with :class:`~django_sqlite_protobuf.tables.ProtobufEnumColumn`.
+
+    Parameters
+    ----------
+    descriptor:
+        Path to (or raw bytes of) the compiled ``.pb`` FileDescriptorSet.
+    enum_type:
+        Fully-qualified proto enum name, e.g. ``"mypackage.Status"``.
+    strip_prefix:
+        String to strip from the start of each value name.  The typical proto
+        convention is to prefix enum values with the enum name, so
+        ``strip_prefix="STATUS_"`` turns ``STATUS_ACTIVE`` into ``ACTIVE``.
+
+    Example
+    -------
+    ::
+
+        status = ProtobufEnumColumn(
+            choices=enum_choices_from_descriptor(DESCRIPTOR, "test.Status", strip_prefix="STATUS_"),
+            verbose_name="Status",
+        )
+    """
+    if isinstance(descriptor, (str, Path)):
+        descriptor = Path(descriptor).read_bytes()
+    return _enum_choices_cached(descriptor, enum_type, strip_prefix)
 
 
 def annotate_proto(
@@ -111,13 +293,18 @@ def annotate_proto(
         Name of the model field that stores the binary protobuf blob.
         Defaults to ``"proto_data"``.
     """
-    annotations = {
-        f.name: ProtobufExtract(
+    desc_bytes = _descriptor_bytes(descriptor)
+    annotations = {}
+    for f in proto_fields:
+        if f.output_field is not None:
+            output_field = f.output_field
+        else:
+            info = _inspect_proto_field(desc_bytes, message_type, f.path)
+            output_field = info.output_field if info is not None else models.TextField()
+        annotations[f.name] = ProtobufExtract(
             data_field, descriptor, message_type, f.path,
-            output_field=f.output_field,
+            output_field=output_field,
         )
-        for f in proto_fields
-    }
     return queryset.annotate(**annotations)
 
 
