@@ -34,3 +34,24 @@ message Person {
     float temperature = 14;
     google.protobuf.Timestamp created_ts = 15;
 }
+
+// Used to test oneof behaviour: two branches that each carry a `label` and a
+// branch-specific field.  COALESCE(extract(.., 'branch_a.label'),
+// extract(.., 'branch_b.label')) should return the label of whichever branch
+// is actually set, because extract now returns NULL for the inactive branch.
+message BranchA {
+    string label = 1;
+    int32 value = 2;
+}
+
+message BranchB {
+    string label = 1;
+    string category = 2;
+}
+
+message Record {
+    oneof source {
+        BranchA branch_a = 1;
+        BranchB branch_b = 2;
+    }
+}

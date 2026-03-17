@@ -125,6 +125,12 @@ fn parse_path_segment(segment: &str) -> (&str, Option<usize>) {
 }
 
 /// Walk a dot-separated field path, optionally indexing into repeated fields with `field[n]`.
+///
+/// Fields that belong to a `oneof` (including proto3 `optional` fields, which
+/// are implemented as synthetic oneofs) return `None` when they are not the
+/// currently active member.  This makes `COALESCE` work correctly across
+/// multiple oneof branches: the inactive branch returns SQL NULL rather than
+/// the proto3 default value.
 fn get_value_by_path(msg: &DynamicMessage, path: &str) -> Option<Value> {
     let mut current = Value::Message(msg.clone());
 
@@ -135,6 +141,12 @@ fn get_value_by_path(msg: &DynamicMessage, path: &str) -> Option<Value> {
             _ => return None,
         };
         let field_desc = inner_msg.descriptor().get_field_by_name(field_name)?;
+        // For oneof members (and proto3 `optional` fields, which use a
+        // synthetic oneof), return NULL when the field is not set so that
+        // COALESCE can select the active branch.
+        if field_desc.containing_oneof().is_some() && !inner_msg.has_field(&field_desc) {
+            return None;
+        }
         let field_value = inner_msg.get_field(&field_desc).into_owned();
         current = match index {
             Some(idx) => match field_value {
@@ -211,6 +223,33 @@ fn extract_field(
 ) -> Result<Option<Value>> {
     let msg = get_or_decode_message(pool, message_type, data)?;
     Ok(get_value_by_path(&msg, field_path))
+}
+
+/// Return the name of the field currently set inside `oneof_name`, or `None`
+/// when no member of that oneof is set.
+/// Returns `Err` when the message type is unknown or the oneof name is not found.
+fn which_oneof(
+    pool: &Arc<DescriptorPool>,
+    message_type: &str,
+    data: &[u8],
+    oneof_name: &str,
+) -> Result<Option<String>> {
+    let msg = get_or_decode_message(pool, message_type, data)?;
+    let oneof_desc = msg
+        .descriptor()
+        .oneofs()
+        .find(|o| o.name() == oneof_name)
+        .ok_or_else(|| {
+            Error::new_message(&format!(
+                "Unknown oneof '{oneof_name}' in message type '{message_type}'"
+            ))
+        })?;
+    for field_desc in oneof_desc.fields() {
+        if msg.has_field(&field_desc) {
+            return Ok(Some(field_desc.name().to_owned()));
+        }
+    }
+    Ok(None)
 }
 
 /// Return `true` when `data` is a valid encoding of the given message type.
@@ -382,6 +421,49 @@ pub fn protobuf_to_json(
     Ok(())
 }
 
+/// `protobuf_which_oneof(data, descriptor, message_type, oneof_name)`
+///
+/// Returns the **field name** of the currently active member of `oneof_name`,
+/// or NULL when no member is set or when `data` is NULL.  Raises an SQL error
+/// when `message_type` is unknown or `oneof_name` does not exist.
+///
+/// Example use — pick a label from whichever oneof branch is active:
+///
+/// ```sql
+/// SELECT COALESCE(
+///     protobuf_extract(data, desc, 'pkg.Record', 'branch_a.label'),
+///     protobuf_extract(data, desc, 'pkg.Record', 'branch_b.label')
+/// ) AS label,
+/// protobuf_which_oneof(data, desc, 'pkg.Record', 'source') AS active_branch
+/// FROM records;
+/// ```
+pub fn protobuf_which_oneof(
+    context: *mut sqlite3_context,
+    values: &[*mut sqlite3_value],
+) -> Result<()> {
+    if values.len() != 4 {
+        return Err(Error::new_message(
+            "protobuf_which_oneof requires 4 arguments: data, descriptor, message_type, oneof_name",
+        ));
+    }
+    if is_null(&values[0]) {
+        api::result_null(context);
+        return Ok(());
+    }
+
+    let data = api::value_blob(&values[0]);
+    let descriptor_bytes = api::value_blob(&values[1]);
+    let message_type = api::value_text(&values[2])?;
+    let oneof_name = api::value_text(&values[3])?;
+
+    let pool = get_or_parse_descriptor(descriptor_bytes)?;
+    match which_oneof(&pool, message_type, data, oneof_name)? {
+        Some(field_name) => api::result_text(context, &field_name)?,
+        None => api::result_null(context),
+    }
+    Ok(())
+}
+
 #[sqlite_entrypoint]
 pub fn sqlite3_extension_init(db: *mut sqlite3) -> Result<()> {
     define_scalar_function(
@@ -403,6 +485,13 @@ pub fn sqlite3_extension_init(db: *mut sqlite3) -> Result<()> {
         "protobuf_to_json",
         3,
         protobuf_to_json,
+        FunctionFlags::DETERMINISTIC,
+    )?;
+    define_scalar_function(
+        db,
+        "protobuf_which_oneof",
+        4,
+        protobuf_which_oneof,
         FunctionFlags::DETERMINISTIC,
     )?;
     Ok(())
@@ -696,5 +785,133 @@ mod tests {
     fn test_value_to_json_list() {
         let list = Value::List(vec![Value::I32(1), Value::I32(2), Value::I32(3)]);
         assert_eq!(value_to_json(&list), serde_json::json!([1, 2, 3]));
+    }
+
+    // -----------------------------------------------------------------------
+    // oneof / optional field presence
+    // -----------------------------------------------------------------------
+
+    fn record_with_branch_a(label: &str, value: i32) -> Vec<u8> {
+        let pool = test_pool();
+        let branch_a_desc = pool.get_message_by_name("test.BranchA").unwrap();
+        let record_desc = pool.get_message_by_name("test.Record").unwrap();
+        let mut branch_a = DynamicMessage::new(branch_a_desc.clone());
+        branch_a.set_field(
+            &branch_a_desc.get_field_by_name("label").unwrap(),
+            Value::String(label.to_string()),
+        );
+        branch_a.set_field(
+            &branch_a_desc.get_field_by_name("value").unwrap(),
+            Value::I32(value),
+        );
+        let mut record = DynamicMessage::new(record_desc.clone());
+        record.set_field(
+            &record_desc.get_field_by_name("branch_a").unwrap(),
+            Value::Message(branch_a),
+        );
+        encode(&record)
+    }
+
+    fn record_with_branch_b(label: &str, category: &str) -> Vec<u8> {
+        let pool = test_pool();
+        let branch_b_desc = pool.get_message_by_name("test.BranchB").unwrap();
+        let record_desc = pool.get_message_by_name("test.Record").unwrap();
+        let mut branch_b = DynamicMessage::new(branch_b_desc.clone());
+        branch_b.set_field(
+            &branch_b_desc.get_field_by_name("label").unwrap(),
+            Value::String(label.to_string()),
+        );
+        branch_b.set_field(
+            &branch_b_desc.get_field_by_name("category").unwrap(),
+            Value::String(category.to_string()),
+        );
+        let mut record = DynamicMessage::new(record_desc.clone());
+        record.set_field(
+            &record_desc.get_field_by_name("branch_b").unwrap(),
+            Value::Message(branch_b),
+        );
+        encode(&record)
+    }
+
+    #[test]
+    fn test_oneof_active_branch_returns_value() {
+        let pool = test_pool();
+        let data = record_with_branch_a("hello", 42);
+        let val = extract_field(&pool, "test.Record", &data, "branch_a.label")
+            .unwrap()
+            .unwrap();
+        assert_eq!(val, Value::String("hello".to_string()));
+    }
+
+    #[test]
+    fn test_oneof_inactive_branch_returns_none() {
+        let pool = test_pool();
+        // branch_b is set, so branch_a should return None (not the default "")
+        let data = record_with_branch_b("world", "tech");
+        let result = extract_field(&pool, "test.Record", &data, "branch_a.label").unwrap();
+        assert!(result.is_none(), "inactive oneof branch must return None, not a default");
+    }
+
+    #[test]
+    fn test_oneof_coalesce_picks_active_label() {
+        let pool = test_pool();
+        let data = record_with_branch_b("from_b", "news");
+        // branch_a.label → None; branch_b.label → Some("from_b")
+        let a = extract_field(&pool, "test.Record", &data, "branch_a.label").unwrap();
+        let b = extract_field(&pool, "test.Record", &data, "branch_b.label").unwrap();
+        let coalesced = a.or(b).unwrap();
+        assert_eq!(coalesced, Value::String("from_b".to_string()));
+    }
+
+    #[test]
+    fn test_which_oneof_returns_active_field_name() {
+        let pool = test_pool();
+        let data = record_with_branch_a("hi", 1);
+        let field_name = which_oneof(&pool, "test.Record", &data, "source")
+            .unwrap()
+            .unwrap();
+        assert_eq!(field_name, "branch_a");
+    }
+
+    #[test]
+    fn test_which_oneof_returns_none_when_empty() {
+        let pool = test_pool();
+        let record_desc = pool.get_message_by_name("test.Record").unwrap();
+        let empty = DynamicMessage::new(record_desc);
+        let data = encode(&empty);
+        let result = which_oneof(&pool, "test.Record", &data, "source").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_which_oneof_unknown_name_is_error() {
+        let pool = test_pool();
+        let data = record_with_branch_a("x", 0);
+        let result = which_oneof(&pool, "test.Record", &data, "no_such_oneof");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_optional_field_absent_returns_none() {
+        let pool = test_pool();
+        // Person with no nickname set; proto3 optional should yield None.
+        let data = person("Alice", 30);
+        let result = extract_field(&pool, "test.Person", &data, "nickname").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_optional_field_present_returns_value() {
+        let pool = test_pool();
+        let desc = pool.get_message_by_name("test.Person").unwrap();
+        let mut msg = DynamicMessage::new(desc.clone());
+        msg.set_field(
+            &desc.get_field_by_name("nickname").unwrap(),
+            Value::String("Bobby".to_string()),
+        );
+        let val = extract_field(&pool, "test.Person", &encode(&msg), "nickname")
+            .unwrap()
+            .unwrap();
+        assert_eq!(val, Value::String("Bobby".to_string()));
     }
 }

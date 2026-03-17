@@ -44,7 +44,7 @@ COPY demo/ /app/
 WORKDIR /app
 
 # Install the demo's own dependencies (django-sqlite-protobuf already installed above).
-RUN pip3 install "django>=4.2" "protobuf>=5.0"
+RUN pip3 install "django>=4.2" "protobuf>=5.0" "django_tables2"
 
 COPY docker/scripts/demo-start.sh /start.sh
 RUN chmod +x /start.sh

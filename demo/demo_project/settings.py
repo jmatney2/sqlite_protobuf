@@ -9,6 +9,7 @@ ALLOWED_HOSTS = ["*"]
 
 INSTALLED_APPS = [
     "django.contrib.contenttypes",
+    "django.contrib.sessions",
     "django.contrib.staticfiles",
     "django_sqlite_protobuf",
     "django_tables2",
@@ -19,7 +20,10 @@ DJANGO_TABLES2_TEMPLATE = "django_tables2/bootstrap5.html"
 
 MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
+    "django.contrib.sessions.middleware.SessionMiddleware",
 ]
+
+SESSION_ENGINE = "django.contrib.sessions.backends.db"
 
 ROOT_URLCONF = "demo_project.urls"
 

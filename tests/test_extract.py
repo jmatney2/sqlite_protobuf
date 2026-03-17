@@ -92,9 +92,9 @@ def test_optional_present(db, descriptor_bytes, pb2):
 
 def test_optional_absent(db, descriptor_bytes, pb2):
     msg = pb2.Person()
-    # Field is absent; proto3 optional returns default value (empty string)
+    # proto3 optional field not set → NULL (not the default empty string)
     result = extract(db, descriptor_bytes, msg.SerializeToString(), "nickname")
-    assert result == "" or result is None
+    assert result is None
 
 
 # ---------------------------------------------------------------------------
@@ -235,3 +235,181 @@ def test_filter_by_field(db, descriptor_bytes, pb2):
     ).fetchall()
     names = [r[0] for r in rows]
     assert set(names) == {"Alice", "Carol"}
+
+
+# ---------------------------------------------------------------------------
+# oneof field presence
+# ---------------------------------------------------------------------------
+
+
+def make_record_a(pb2, label, value):
+    return pb2.Record(branch_a=pb2.BranchA(label=label, value=value))
+
+
+def make_record_b(pb2, label, category):
+    return pb2.Record(branch_b=pb2.BranchB(label=label, category=category))
+
+
+def test_oneof_active_branch_returns_value(db, descriptor_bytes, pb2):
+    rec = make_record_a(pb2, "hello", 42)
+    result = extract(db, descriptor_bytes, rec.SerializeToString(), "branch_a.label", "test.Record")
+    assert result == "hello"
+
+
+def test_oneof_inactive_branch_returns_null(db, descriptor_bytes, pb2):
+    # branch_b is set — branch_a fields must be NULL, not the proto default ""
+    rec = make_record_b(pb2, "world", "tech")
+    result = extract(db, descriptor_bytes, rec.SerializeToString(), "branch_a.label", "test.Record")
+    assert result is None
+
+
+def test_oneof_coalesce_picks_active_label(db, descriptor_bytes, pb2):
+    # With branch_b set, COALESCE should skip NULL branch_a and return branch_b label.
+    rec = make_record_b(pb2, "from_b", "news")
+    row = db.execute(
+        """
+        SELECT COALESCE(
+            protobuf_extract(?, ?, 'test.Record', 'branch_a.label'),
+            protobuf_extract(?, ?, 'test.Record', 'branch_b.label')
+        )
+        """,
+        (rec.SerializeToString(), descriptor_bytes,
+         rec.SerializeToString(), descriptor_bytes),
+    ).fetchone()
+    assert row[0] == "from_b"
+
+
+def test_oneof_coalesce_with_table(db, descriptor_bytes, pb2):
+    db.execute("CREATE TABLE records (proto BLOB)")
+    rows = [
+        make_record_a(pb2, "alpha", 1),
+        make_record_b(pb2, "beta", "x"),
+        make_record_a(pb2, "gamma", 3),
+    ]
+    db.executemany("INSERT INTO records VALUES (?)", [(r.SerializeToString(),) for r in rows])
+    results = db.execute(
+        """
+        SELECT COALESCE(
+            protobuf_extract(proto, ?, 'test.Record', 'branch_a.label'),
+            protobuf_extract(proto, ?, 'test.Record', 'branch_b.label')
+        ) FROM records
+        """,
+        (descriptor_bytes, descriptor_bytes),
+    ).fetchall()
+    assert [r[0] for r in results] == ["alpha", "beta", "gamma"]
+
+
+# ---------------------------------------------------------------------------
+# protobuf_which_oneof
+# ---------------------------------------------------------------------------
+
+
+def which_oneof(db, descriptor_bytes, msg_bytes, oneof_name, message_type="test.Record"):
+    row = db.execute(
+        "SELECT protobuf_which_oneof(?, ?, ?, ?)",
+        (msg_bytes, descriptor_bytes, message_type, oneof_name),
+    ).fetchone()
+    return row[0]
+
+
+def test_which_oneof_branch_a(db, descriptor_bytes, pb2):
+    rec = make_record_a(pb2, "x", 0)
+    assert which_oneof(db, descriptor_bytes, rec.SerializeToString(), "source") == "branch_a"
+
+
+def test_which_oneof_branch_b(db, descriptor_bytes, pb2):
+    rec = make_record_b(pb2, "y", "cat")
+    assert which_oneof(db, descriptor_bytes, rec.SerializeToString(), "source") == "branch_b"
+
+
+def test_which_oneof_empty_returns_null(db, descriptor_bytes, pb2):
+    rec = pb2.Record()
+    assert which_oneof(db, descriptor_bytes, rec.SerializeToString(), "source") is None
+
+
+def test_which_oneof_null_data_returns_null(db, descriptor_bytes):
+    row = db.execute(
+        "SELECT protobuf_which_oneof(NULL, ?, 'test.Record', 'source')",
+        (descriptor_bytes,),
+    ).fetchone()
+    assert row[0] is None
+
+
+def test_which_oneof_unknown_name_raises(db, descriptor_bytes, pb2):
+    import pytest
+
+    rec = make_record_a(pb2, "x", 0)
+    with pytest.raises(Exception, match="no_such_oneof"):
+        db.execute(
+            "SELECT protobuf_which_oneof(?, ?, 'test.Record', 'no_such_oneof')",
+            (rec.SerializeToString(), descriptor_bytes),
+        ).fetchone()
+
+
+# ---------------------------------------------------------------------------
+# Generated columns + expression indexes (SQLite DDL)
+# ---------------------------------------------------------------------------
+
+
+def test_generated_virtual_column(db, descriptor_bytes, pb2):
+    """A VIRTUAL generated column extracts a field without storing extra data."""
+    hex_desc = descriptor_bytes.hex()
+    db.execute(
+        f"""
+        CREATE TABLE people (
+            proto BLOB,
+            name TEXT GENERATED ALWAYS AS (
+                protobuf_extract(proto, X'{hex_desc}', 'test.Person', 'name')
+            ) VIRTUAL
+        )
+        """
+    )
+    people = [pb2.Person(name="Alice", age=30), pb2.Person(name="Bob", age=25)]
+    db.executemany("INSERT INTO people (proto) VALUES (?)", [(p.SerializeToString(),) for p in people])
+    rows = db.execute("SELECT name FROM people ORDER BY name").fetchall()
+    assert [r[0] for r in rows] == ["Alice", "Bob"]
+
+
+def test_generated_stored_column_with_index(db, descriptor_bytes, pb2):
+    """A STORED generated column can be indexed and queried efficiently."""
+    hex_desc = descriptor_bytes.hex()
+    db.execute(
+        f"""
+        CREATE TABLE people (
+            proto BLOB,
+            age INTEGER GENERATED ALWAYS AS (
+                protobuf_extract(proto, X'{hex_desc}', 'test.Person', 'age')
+            ) STORED
+        )
+        """
+    )
+    db.execute("CREATE INDEX people_age_idx ON people(age)")
+    people = [
+        pb2.Person(name="Alice", age=30),
+        pb2.Person(name="Bob", age=25),
+        pb2.Person(name="Carol", age=35),
+    ]
+    db.executemany("INSERT INTO people (proto) VALUES (?)", [(p.SerializeToString(),) for p in people])
+    rows = db.execute("SELECT age FROM people WHERE age > 28 ORDER BY age").fetchall()
+    assert [r[0] for r in rows] == [30, 35]
+
+
+def test_expression_index(db, descriptor_bytes, pb2):
+    """An expression index on protobuf_extract can be created."""
+    hex_desc = descriptor_bytes.hex()
+    db.execute("CREATE TABLE people (proto BLOB)")
+    db.execute(
+        f"""
+        CREATE INDEX people_name_idx ON people(
+            protobuf_extract(proto, X'{hex_desc}', 'test.Person', 'name')
+        )
+        """
+    )
+    people = [pb2.Person(name="Alice"), pb2.Person(name="Bob")]
+    db.executemany("INSERT INTO people VALUES (?)", [(p.SerializeToString(),) for p in people])
+    # Query using the same literal expression so SQLite can use the index.
+    rows = db.execute(
+        f"SELECT protobuf_extract(proto, X'{hex_desc}', 'test.Person', 'name') "
+        "FROM people ORDER BY 1",
+    ).fetchall()
+    assert [r[0] for r in rows] == ["Alice", "Bob"]

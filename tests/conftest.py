@@ -16,6 +16,29 @@ import pytest
 REPO_ROOT = Path(__file__).parent.parent
 PROTO_DIR = REPO_ROOT / "proto"
 
+# ---------------------------------------------------------------------------
+# Django setup (needed by tests that import django_sqlite_protobuf)
+# ---------------------------------------------------------------------------
+
+# Make the Django integration package importable from the source tree.
+sys.path.insert(0, str(REPO_ROOT / "django_sqlite_protobuf"))
+
+import django
+from django.conf import settings
+
+if not settings.configured:
+    settings.configure(
+        DATABASES={
+            "default": {
+                "ENGINE": "django.db.backends.sqlite3",
+                "NAME": ":memory:",
+            }
+        },
+        INSTALLED_APPS=[],
+        USE_TZ=False,
+    )
+    django.setup()
+
 
 # ---------------------------------------------------------------------------
 # Build

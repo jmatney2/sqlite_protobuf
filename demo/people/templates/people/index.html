@@ -22,7 +22,10 @@
 <nav class="navbar navbar-dark bg-dark mb-4">
   <div class="container">
     <span class="navbar-brand fw-bold">sqlite_protobuf Demo</span>
-    <span class="text-secondary small">Binary protobuf blobs · queried with SQL</span>
+    <div class="d-flex gap-3">
+      <a href="{% url 'index' %}" class="nav-link text-white fw-semibold">People</a>
+      <a href="{% url 'records' %}" class="nav-link text-white-50">Records (ProtoView)</a>
+    </div>
   </div>
 </nav>
 

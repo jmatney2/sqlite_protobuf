@@ -47,6 +47,10 @@ _NICKNAMES = [
     "Guru", "Hawk", "Jet", "Maverick", "Scout",
 ]
 
+_LABELS_A = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta"]
+_LABELS_B = ["north", "south", "east", "west", "central", "outer", "inner", "upper"]
+_CATEGORIES = ["news", "tech", "sports", "arts", "science", "politics", "finance", "health"]
+
 
 @lru_cache(maxsize=1)
 def _get_classes() -> dict:
@@ -58,6 +62,9 @@ def _get_classes() -> dict:
     return {
         "Person": GetMessageClass(pool.FindMessageTypeByName("test.Person")),
         "Address": GetMessageClass(pool.FindMessageTypeByName("test.Address")),
+        "Record": GetMessageClass(pool.FindMessageTypeByName("test.Record")),
+        "BranchA": GetMessageClass(pool.FindMessageTypeByName("test.BranchA")),
+        "BranchB": GetMessageClass(pool.FindMessageTypeByName("test.BranchB")),
     }
 
 
@@ -101,3 +108,25 @@ def make_random_person() -> bytes:
         p.previous_addresses.append(_random_address(classes))
 
     return p.SerializeToString()
+
+
+def make_random_record() -> bytes:
+    """
+    Generate a random ``test.Record`` blob.
+
+    Randomly sets either the ``branch_a`` or ``branch_b`` oneof member,
+    demonstrating the polymorphic-row pattern.
+    """
+    classes = _get_classes()
+    r = classes["Record"]()
+    if random.random() > 0.5:
+        a = classes["BranchA"]()
+        a.label = random.choice(_LABELS_A)
+        a.value = random.randint(1, 100)
+        r.branch_a.CopyFrom(a)
+    else:
+        b = classes["BranchB"]()
+        b.label = random.choice(_LABELS_B)
+        b.category = random.choice(_CATEGORIES)
+        r.branch_b.CopyFrom(b)
+    return r.SerializeToString()
