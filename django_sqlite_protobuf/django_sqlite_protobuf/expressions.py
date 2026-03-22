@@ -53,14 +53,21 @@ the same expression literal.  Indexing a generated column (above) is usually
 simpler and more reliable.
 """
 
+import os
 from pathlib import Path
 
 from django.db.models import BinaryField, DateTimeField, FloatField, Func, IntegerField, TextField
 from django.db.models.expressions import RawSQL, Value
 
 
-def _descriptor_bytes(descriptor: str | Path | bytes | memoryview) -> bytes:
-    if isinstance(descriptor, (str, Path)):
+def _descriptor_bytes(descriptor: "str | os.PathLike | bytes | memoryview") -> bytes:
+    """Normalise a descriptor argument to raw bytes.
+
+    Accepts plain ``str``, any ``os.PathLike`` (``pathlib.Path``,
+    ``pathlib.PurePosixPath``, etc. — Django migrations serialise
+    ``pathlib.Path`` as ``pathlib.PurePosixPath``), or raw ``bytes``.
+    """
+    if isinstance(descriptor, (str, os.PathLike)):
         return Path(descriptor).read_bytes()
     return bytes(descriptor)
 
@@ -390,6 +397,139 @@ def make_protobuf_index(
         Value(message_type),
         Value(path),
         function="protobuf_extract",
+        output_field=TextField(),
+    )
+    return Index(expression, name=name, **index_kwargs)
+
+
+# ---------------------------------------------------------------------------
+# which_oneof generated columns and indexes
+# ---------------------------------------------------------------------------
+
+
+def make_protobuf_which_oneof_generated_field(
+    blob_field: str,
+    descriptor: str | Path | bytes,
+    message_type: str,
+    oneof_name: str,
+    db_persist: bool = False,
+):
+    """
+    Return a Django ``GeneratedField`` whose value is
+    ``protobuf_which_oneof(<blob_field>, <descriptor>, <message_type>, <oneof_name>)``.
+
+    Requires **Django 5.0+**.
+
+    The result is a ``TEXT`` column containing the active oneof member's field
+    name (e.g. ``"branch_a"`` or ``"branch_b"``), or ``NULL`` when no member
+    is set.  This lets you sort/group/index by logical record type without
+    parsing the protobuf at query time.
+
+    Parameters
+    ----------
+    blob_field:
+        Name of the model field that stores the protobuf blob.
+    descriptor:
+        Path to (or raw bytes of) the compiled ``.pb`` FileDescriptorSet.
+    message_type:
+        Fully-qualified protobuf message name, e.g. ``\"mypackage.Record\"``.
+    oneof_name:
+        Name of the ``oneof`` in the message, e.g. ``\"source\"``.
+    db_persist:
+        ``True`` for a STORED generated column, ``False`` (default) for
+        VIRTUAL.
+
+    Example
+    -------
+    ::
+
+        from django_sqlite_protobuf.expressions import (
+            make_protobuf_which_oneof_generated_field,
+        )
+
+        class Record(models.Model):
+            proto_data  = models.BinaryField()
+            source_type = make_protobuf_which_oneof_generated_field(
+                \"proto_data\", DESCRIPTOR, \"pkg.Record\", \"source\",
+                db_persist=True,  # STORED — can be indexed directly
+            )
+
+            class Meta:
+                indexes = [
+                    models.Index(fields=[\"source_type\"],
+                                 name=\"record_source_type_idx\"),
+                ]
+    """
+    try:
+        from django.db.models import GeneratedField
+    except ImportError as exc:
+        raise ImportError(
+            "GeneratedField requires Django 5.0 or later."
+        ) from exc
+
+    descriptor_bytes = _descriptor_bytes(descriptor)
+    expression = Func(
+        blob_field,
+        _descriptor_hex_sql(descriptor_bytes),
+        Value(message_type),
+        Value(oneof_name),
+        function="protobuf_which_oneof",
+        output_field=TextField(),
+    )
+    return GeneratedField(expression=expression, output_field=TextField(), db_persist=db_persist)
+
+
+def make_protobuf_which_oneof_index(
+    blob_field: str,
+    descriptor: str | Path | bytes,
+    message_type: str,
+    oneof_name: str,
+    name: str,
+    **index_kwargs,
+):
+    """
+    Return a Django ``Index`` on
+    ``protobuf_which_oneof(<blob_field>, <descriptor>, <message_type>, <oneof_name>)``.
+
+    The descriptor bytes are embedded as a SQL hex literal so the index
+    definition is self-contained.
+
+    .. note::
+        Indexing a generated column (via
+        :func:`make_protobuf_which_oneof_generated_field` + a normal
+        ``Meta.indexes`` entry) is usually simpler and more reliably used by
+        the query planner.
+
+    Parameters
+    ----------
+    blob_field, descriptor, message_type, oneof_name:
+        Same as :func:`make_protobuf_which_oneof_generated_field`.
+    name:
+        Required index name.
+    **index_kwargs:
+        Extra keyword arguments forwarded to ``Index`` (e.g. ``condition``).
+
+    Example
+    -------
+    ::
+
+        class Meta:
+            indexes = [
+                make_protobuf_which_oneof_index(
+                    \"proto_data\", DESCRIPTOR, \"pkg.Record\", \"source\",
+                    name=\"record_source_type_expr_idx\",
+                ),
+            ]
+    """
+    from django.db.models import Index
+
+    descriptor_bytes = _descriptor_bytes(descriptor)
+    expression = Func(
+        blob_field,
+        _descriptor_hex_sql(descriptor_bytes),
+        Value(message_type),
+        Value(oneof_name),
+        function="protobuf_which_oneof",
         output_field=TextField(),
     )
     return Index(expression, name=name, **index_kwargs)

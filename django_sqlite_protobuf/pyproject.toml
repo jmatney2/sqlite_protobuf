@@ -13,8 +13,12 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["django_sqlite_protobuf"]
-# Include pre-compiled native libraries placed by the build:* tasks.
+# Include pre-compiled native libraries, templates, and templatetags.
 # The libs/ tree looks like:
 #   django_sqlite_protobuf/libs/x86_64-unknown-linux-gnu/libsqlite_protobuf.so
 #   django_sqlite_protobuf/libs/x86_64-unknown-linux-musl/libsqlite_protobuf.so
-artifacts = ["django_sqlite_protobuf/libs/**"]
+artifacts = [
+    "django_sqlite_protobuf/libs/**",
+    "django_sqlite_protobuf/templates/**",
+    "django_sqlite_protobuf/templatetags/**",
+]

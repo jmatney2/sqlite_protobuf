@@ -1,7 +1,5 @@
 import json
 
-from pathlib import Path
-
 from django.db.models import Avg, FloatField, IntegerField, TextField
 from django.db.models.functions import Coalesce
 from django.shortcuts import redirect, render
@@ -9,6 +7,7 @@ from django.views.decorators.http import require_POST
 from django_tables2 import RequestConfig
 
 from django_sqlite_protobuf.expressions import ProtobufExtract
+from django_sqlite_protobuf.proto_view import build_proto_view_context
 
 from .models import PersonRecord, RecordEntry
 from .proto_helpers import make_random_person, make_random_record
@@ -117,79 +116,42 @@ def records(request):
     if view_name not in VIEWS:
         view_name = "all"
 
-    # Restore a user-saved config from the session if present, otherwise
-    # use the class defaults.
     view_cls = VIEWS[view_name]
     saved_config = request.session.get(f"record_view_config_{view_name}")
     proto_view = view_cls.from_config(saved_config) if saved_config else view_cls()
 
-    # apply() annotates the queryset with column expressions and applies
-    # fixed + active dynamic filters in one call.
-    qs = proto_view.apply(RecordEntry.objects.all(), request.GET)
-
-    # COALESCE: picks the label from whichever branch is active.
-    # This relies on the new NULL behavior: protobuf_extract returns NULL
-    # for an inactive oneof member, not the proto3 default empty string.
-    qs = qs.annotate(
-        combined_label=Coalesce(
-            ProtobufExtract(
-                "proto_data", RECORD_DESCRIPTOR, RECORD_MESSAGE, "branch_a.label",
-                output_field=TextField(),
-            ),
-            ProtobufExtract(
-                "proto_data", RECORD_DESCRIPTOR, RECORD_MESSAGE, "branch_b.label",
-                output_field=TextField(),
-            ),
-        )
+    # COALESCE extra column: picks the label from whichever branch is active.
+    combined_label_expr = Coalesce(
+        ProtobufExtract(
+            "proto_data", RECORD_DESCRIPTOR, RECORD_MESSAGE, "branch_a.label",
+            output_field=TextField(),
+        ),
+        ProtobufExtract(
+            "proto_data", RECORD_DESCRIPTOR, RECORD_MESSAGE, "branch_b.label",
+            output_field=TextField(),
+        ),
     )
 
-    # Sorting: any sortable column name, optionally prefixed with "-".
-    sort = request.GET.get("sort", "")
-    valid_sort_cols = proto_view.sortable_columns() + ["combined_label"]
-    if sort.lstrip("-") in valid_sort_cols:
-        qs = qs.order_by(sort)
-
-    # Materialise up to 100 rows as plain dicts for the template.
-    columns = proto_view.columns
-    rows = []
-    for record in qs[:100]:
-        row = {"_id": record.id}
-        for col in columns:
-            row[col.name] = getattr(record, col.name, None)
-        row["combined_label"] = getattr(record, "combined_label", None)
-        rows.append(row)
-
-    # Serialised config for the "user-defined views" panel.
-    config_json = json.dumps(proto_view.serialize_config(), indent=2)
-
-    # Build toggle-sort URLs for each column header.
-    def sort_url(col_name):
-        new_sort = f"-{col_name}" if sort == col_name else col_name
-        params = request.GET.copy()
-        params["sort"] = new_sort
-        return "?" + params.urlencode()
-
-    col_sort_urls = {col.name: sort_url(col.name) for col in columns}
-    col_sort_urls["combined_label"] = sort_url("combined_label")
+    ctx = build_proto_view_context(
+        proto_view,
+        RecordEntry.objects.all(),
+        request.GET,
+        extra_annotations={"combined_label": combined_label_expr},
+    )
 
     return render(
         request,
         "people/records.html",
         {
-            "rows": rows,
-            "columns": columns,
+            **ctx,
             "proto_view": proto_view,
             "active_view": view_name,
             "view_labels": VIEW_LABELS,
-            "filter_form_fields": proto_view.filter_form_fields(),
-            "active_params": {
-                k: v for k, v in request.GET.items()
-                if k not in ("view", "sort")
-            },
-            "sort": sort,
-            "col_sort_urls": col_sort_urls,
-            "config_json": config_json,
-            "total_scoped": qs.count(),
+            "extra_columns": [
+                {"name": "combined_label", "verbose_name": "Combined Label", "sortable": True},
+            ],
+            "config_json": json.dumps(proto_view.serialize_config(), indent=2),
+            "total_scoped": ctx["total"],
             "total_all": RecordEntry.objects.count(),
         },
     )

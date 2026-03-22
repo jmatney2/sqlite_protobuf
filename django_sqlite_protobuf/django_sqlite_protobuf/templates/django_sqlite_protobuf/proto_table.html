@@ -1,0 +1,106 @@
+{% load proto_view_tags %}
+{# -----------------------------------------------------------------------
+   django_sqlite_protobuf/proto_table.html
+   Renders a filter form (when dynamic filters are configured) and a
+   sortable data table from the context produced by build_proto_view_context().
+
+   Required context variables (all produced by build_proto_view_context):
+     columns            — list of column objects (ProtoColumn, OneofColumn, ModelColumn)
+     rows               — list of plain dicts, one per row
+     col_sort_urls      — {col_name: url} for sortable headers
+     sort               — current sort value (may be empty string)
+     filter_form_fields — list of {name, label, lookup} dicts
+     active_params      — params dict without the sort key
+
+   Optional context variables:
+     extra_columns      — list of {name, verbose_name, sortable} dicts for
+                          columns that come from extra_annotations (e.g.
+                          computed via Coalesce) rather than ProtoView.columns
+     proto_empty_message — text shown when rows is empty
+
+   CSS customisation via context (all have defaults):
+     proto_table_class          — <table> CSS class
+     proto_table_container_class — outer div class
+     proto_thead_class          — <thead> CSS class
+     proto_sort_link_class      — sort <a> CSS class
+     proto_null_class           — null-cell CSS class
+   ----------------------------------------------------------------------- #}
+
+{% if filter_form_fields %}
+<form method="get" class="d-flex gap-2 flex-wrap align-items-center mb-3">
+  {% for k, v in active_params.items %}
+  <input type="hidden" name="{{ k }}" value="{{ v }}">
+  {% endfor %}
+  {% for f in filter_form_fields %}
+  <input type="text"
+         name="{{ f.name }}"
+         value="{{ active_params|dict_get:f.name|default:'' }}"
+         placeholder="{{ f.label }}"
+         class="form-control form-control-sm"
+         style="width:180px">
+  {% endfor %}
+  <button type="submit" class="btn btn-sm btn-outline-primary">Search</button>
+  <a href="?" class="btn btn-sm btn-outline-secondary">Clear</a>
+</form>
+{% endif %}
+
+<div class="{{ proto_table_container_class|default:'table-responsive' }}">
+  <table class="{{ proto_table_class|default:'table table-hover table-sm mb-0' }}">
+    <thead class="{{ proto_thead_class|default:'table-light' }}">
+      <tr>
+        {% for col in columns %}
+        <th>
+          {% if col.sortable %}
+          <a href="{{ col_sort_urls|dict_get:col.name }}"
+             class="{{ proto_sort_link_class|default:'proto-sort-link' }}"
+             style="color:inherit;text-decoration:none">
+            {{ col.verbose_name }}
+            {% if sort == col.name %}▲{% elif sort == "-"|add:col.name %}▼{% endif %}
+          </a>
+          {% else %}
+          {{ col.verbose_name }}
+          {% endif %}
+        </th>
+        {% endfor %}
+        {% for xcol in extra_columns %}
+        <th>
+          {% if xcol.sortable %}
+          <a href="{{ col_sort_urls|dict_get:xcol.name }}"
+             class="{{ proto_sort_link_class|default:'proto-sort-link' }}"
+             style="color:inherit;text-decoration:none">
+            {{ xcol.verbose_name }}
+            {% if sort == xcol.name %}▲{% elif sort == "-"|add:xcol.name %}▼{% endif %}
+          </a>
+          {% else %}
+          {{ xcol.verbose_name }}
+          {% endif %}
+        </th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% if rows %}
+      {% for row in rows %}
+      <tr>
+        {% for col in columns %}
+        {% with val=row|dict_get:col.name %}
+        <td>{% if val is not None %}{{ val }}{% else %}<span class="{{ proto_null_class|default:'text-muted fst-italic' }}">—</span>{% endif %}</td>
+        {% endwith %}
+        {% endfor %}
+        {% for xcol in extra_columns %}
+        {% with val=row|dict_get:xcol.name %}
+        <td>{% if val is not None %}{{ val }}{% else %}<span class="{{ proto_null_class|default:'text-muted fst-italic' }}">—</span>{% endif %}</td>
+        {% endwith %}
+        {% endfor %}
+      </tr>
+      {% endfor %}
+      {% else %}
+      <tr>
+        <td colspan="{{ columns|length }}" class="text-center text-muted py-4">
+          {{ proto_empty_message|default:"No records found." }}
+        </td>
+      </tr>
+      {% endif %}
+    </tbody>
+  </table>
+</div>

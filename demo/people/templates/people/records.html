@@ -9,9 +9,7 @@
   <style>
     body { background: #f8f9fa; }
     code { background: #e9ecef; padding: .1em .35em; border-radius: .25rem; }
-    .sort-link { color: inherit; text-decoration: none; }
-    .sort-link:hover { text-decoration: underline; }
-    .null-cell { color: #adb5bd; font-style: italic; }
+    .proto-sort-link:hover { text-decoration: underline; }
     pre { font-size: .8rem; }
   </style>
 </head>
@@ -50,7 +48,7 @@
     <span class="text-muted small ms-auto">{{ total_scoped }} shown · {{ total_all }} total</span>
   </div>
 
-  <!-- View tabs + search form -->
+  <!-- View tabs -->
   <div class="card mb-3">
     <div class="card-body py-2">
       <div class="d-flex gap-2 flex-wrap align-items-center">
@@ -60,27 +58,11 @@
           {{ label }}
         </a>
         {% endfor %}
-
-        {% if filter_form_fields %}
-        <form method="get" class="d-flex gap-2 ms-3 flex-wrap align-items-center">
-          <input type="hidden" name="view" value="{{ active_view }}">
-          {% for field in filter_form_fields %}
-          <input type="text"
-                 name="{{ field.name }}"
-                 value="{{ active_params|dict_get:field.name|default:'' }}"
-                 placeholder="{{ field.label }}"
-                 class="form-control form-control-sm"
-                 style="width: 160px">
-          {% endfor %}
-          <button type="submit" class="btn btn-sm btn-outline-primary">Search</button>
-          <a href="?view={{ active_view }}" class="btn btn-sm btn-outline-secondary">Clear</a>
-        </form>
-        {% endif %}
       </div>
     </div>
   </div>
 
-  <!-- Main table -->
+  <!-- Main table (built-in proto_table template) -->
   <div class="card mb-4">
     <div class="card-header d-flex justify-content-between align-items-center">
       <span class="fw-semibold">
@@ -91,20 +73,24 @@
         Columns from <code>ProtoView.columns</code> · click headers to sort
       </span>
     </div>
+
+    {# Inject an extra "Combined Label" column header alongside the view columns #}
     <div class="table-responsive">
       <table class="table table-hover table-sm mb-0">
         <thead class="table-light">
           <tr>
             {% for col in columns %}
             <th>
-              <a href="{{ col_sort_urls|dict_get:col.name }}" class="sort-link">
+              <a href="{{ col_sort_urls|dict_get:col.name }}"
+                 class="proto-sort-link" style="color:inherit;text-decoration:none">
                 {{ col.verbose_name }}
                 {% if sort == col.name %}▲{% elif sort == "-"|add:col.name %}▼{% endif %}
               </a>
             </th>
             {% endfor %}
             <th>
-              <a href="{{ col_sort_urls|dict_get:'combined_label' }}" class="sort-link">
+              <a href="{{ col_sort_urls|dict_get:'combined_label' }}"
+                 class="proto-sort-link" style="color:inherit;text-decoration:none">
                 Combined Label
                 <span class="badge bg-info text-dark ms-1" style="font-size:.65rem">COALESCE</span>
                 {% if sort == "combined_label" %}▲{% elif sort == "-combined_label" %}▼{% endif %}
@@ -130,7 +116,7 @@
                   {{ val }}
                 {% endif %}
               {% else %}
-                <span class="null-cell">—</span>
+                <span class="text-muted fst-italic">—</span>
               {% endif %}
             </td>
             {% endwith %}
@@ -149,6 +135,28 @@
       </table>
     </div>
   </div>
+
+  <!-- Filter form (rendered by built-in template helper) -->
+  {% if filter_form_fields %}
+  <div class="card mb-4">
+    <div class="card-header fw-semibold">Search</div>
+    <div class="card-body">
+      <form method="get" class="d-flex gap-2 flex-wrap align-items-center">
+        <input type="hidden" name="view" value="{{ active_view }}">
+        {% for f in filter_form_fields %}
+        <input type="text"
+               name="{{ f.name }}"
+               value="{{ active_params|dict_get:f.name|default:'' }}"
+               placeholder="{{ f.label }}"
+               class="form-control form-control-sm"
+               style="width: 160px">
+        {% endfor %}
+        <button type="submit" class="btn btn-sm btn-outline-primary">Search</button>
+        <a href="?view={{ active_view }}" class="btn btn-sm btn-outline-secondary">Clear</a>
+      </form>
+    </div>
+  </div>
+  {% endif %}
 
   <!-- View definition + serialised config -->
   <div class="row g-4 mb-4">
@@ -332,6 +340,7 @@ CREATE INDEX people_recordentry_branch_a_label
           <pre>from django_sqlite_protobuf.expressions import (
     make_protobuf_generated_field,
     make_protobuf_index,
+    make_protobuf_which_oneof_generated_field,
 )
 
 class RecordEntry(models.Model):
@@ -342,20 +351,23 @@ class RecordEntry(models.Model):
         output_field=models.TextField(),
         db_persist=True,   # STORED → indexable
     )
+    source_type = make_protobuf_which_oneof_generated_field(
+        "proto_data", DESCRIPTOR,
+        "test.Record", "source",
+        db_persist=True,
+    )
     class Meta:
         indexes = [
             models.Index(fields=["branch_a_label"],
                          name="recordentry_branch_a_label_idx"),
-            # or an expression index without a generated column:
-            make_protobuf_index(
-                "proto_data", DESCRIPTOR,
-                "test.Record", "branch_b.category",
-                name="recordentry_branch_b_category_idx",
-            ),
+            models.Index(fields=["source_type"],
+                         name="recordentry_source_type_idx"),
         ]</pre>
           <p class="mb-0">
-            After the column exists, query it directly:
-            <code>RecordEntry.objects.filter(branch_a_label="alpha")</code>.
+            After the column exists, use <code>ModelColumn</code> and
+            <code>ModelDynamicFilter</code> in a <code>ProtoView</code> to
+            display and filter it directly — no protobuf extraction overhead
+            at query time.
           </p>
         </div>
       </div>

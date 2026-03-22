@@ -44,6 +44,7 @@ Example
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from functools import lru_cache
@@ -202,9 +203,14 @@ def _inspect_proto_field(
     return _FieldInfo(output_field=models.TextField())
 
 
-def _descriptor_bytes(descriptor: str | Path | bytes) -> bytes:
-    """Normalise a descriptor argument to raw bytes."""
-    if isinstance(descriptor, (str, Path)):
+def _descriptor_bytes(descriptor: "str | os.PathLike | bytes") -> bytes:
+    """Normalise a descriptor argument to raw bytes.
+
+    Accepts ``str``, any ``os.PathLike`` (including ``pathlib.PurePosixPath``,
+    which is what Django migrations produce when serialising a
+    ``pathlib.Path``), or raw ``bytes``.
+    """
+    if isinstance(descriptor, (str, os.PathLike)):
         return Path(descriptor).read_bytes()
     return descriptor
 

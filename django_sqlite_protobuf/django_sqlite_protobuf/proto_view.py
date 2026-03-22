@@ -68,6 +68,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 from django.db.models import TextField
 
@@ -235,7 +236,7 @@ class DynamicFilter:
             self.label = self.name.replace("_", " ").title()
 
     def to_dict(self) -> dict:
-        return {"name": self.name, "path": self.path,
+        return {"type": "proto", "name": self.name, "path": self.path,
                 "label": self.label, "lookup": self.lookup}
 
     @classmethod
@@ -246,10 +247,148 @@ class DynamicFilter:
 
 
 # ---------------------------------------------------------------------------
+# Model-field column and filter descriptors
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ModelColumn:
+    """
+    A column backed by a regular Django model field (not a protobuf extraction).
+
+    Use this for fields that already live on the model — either a real database
+    column or a generated column created with
+    :func:`~django_sqlite_protobuf.expressions.make_protobuf_generated_field`
+    or
+    :func:`~django_sqlite_protobuf.expressions.make_protobuf_which_oneof_generated_field`.
+
+    No ORM annotation is added; the value is read directly from the model row.
+
+    Parameters
+    ----------
+    name:
+        Model field name (also used as the column accessor).
+    verbose_name:
+        Column header label.  Defaults to ``name`` title-cased.
+    sortable:
+        Whether to allow ordering by this column.
+
+    Example
+    -------
+    ::
+
+        class RecordView(ProtoView):
+            columns = [
+                # A generated column that already exists on the model
+                ModelColumn("source_type", verbose_name="Type"),
+                ProtoColumn("label", "branch_a.label"),
+            ]
+    """
+
+    name: str
+    verbose_name: str = ""
+    sortable: bool = True
+
+    def __post_init__(self) -> None:
+        if not self.verbose_name:
+            self.verbose_name = self.name.replace("_", " ").title()
+
+    def to_dict(self) -> dict:
+        return {"type": "model", "name": self.name,
+                "verbose_name": self.verbose_name, "sortable": self.sortable}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ModelColumn":
+        return cls(name=d["name"],
+                   verbose_name=d.get("verbose_name", ""),
+                   sortable=d.get("sortable", True))
+
+
+@dataclass
+class ModelFilter:
+    """
+    Fixed filter on a regular model field.
+
+    Applied unconditionally (like :class:`OneofFilter` and
+    :class:`FieldFilter`) but targets a plain model column instead of a
+    protobuf path.
+
+    Parameters
+    ----------
+    field_name:
+        Django model field name (or double-underscore lookup path).
+    value:
+        Value to match.
+    lookup:
+        ORM lookup suffix (``"exact"``, ``"gte"``, etc.).
+
+    Example
+    -------
+    ::
+
+        fixed_filters = [ModelFilter("source_type", "branch_a")]
+    """
+
+    field_name: str
+    value: Any
+    lookup: str = "exact"
+
+
+@dataclass
+class ModelDynamicFilter:
+    """
+    A user-supplied filter on a regular model field.
+
+    Like :class:`DynamicFilter` but targets a plain model column rather than
+    a protobuf extraction path, so no ORM annotation is required.
+
+    Parameters
+    ----------
+    name:
+        Key in the params dict.
+    field_name:
+        Django model field name to filter on.
+    label:
+        Human-readable form label.  Defaults to ``name`` title-cased.
+    lookup:
+        ORM lookup suffix.
+
+    Example
+    -------
+    ::
+
+        dynamic_filters = [
+            ModelDynamicFilter("type", "source_type", lookup="exact",
+                               label="Record type"),
+        ]
+    """
+
+    name: str
+    field_name: str
+    label: str = ""
+    lookup: str = "exact"
+
+    def __post_init__(self) -> None:
+        if not self.label:
+            self.label = self.name.replace("_", " ").title()
+
+    def to_dict(self) -> dict:
+        return {"type": "model", "name": self.name, "field_name": self.field_name,
+                "label": self.label, "lookup": self.lookup}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ModelDynamicFilter":
+        return cls(name=d["name"], field_name=d["field_name"],
+                   label=d.get("label", ""),
+                   lookup=d.get("lookup", "exact"))
+
+
+# ---------------------------------------------------------------------------
 # ProtoView
 # ---------------------------------------------------------------------------
 
-_COLUMN_TYPES = {"proto": ProtoColumn, "oneof": OneofColumn}
+_COLUMN_TYPES = {"proto": ProtoColumn, "oneof": OneofColumn, "model": ModelColumn}
+_DYNAMIC_FILTER_TYPES = {"proto": DynamicFilter, "model": ModelDynamicFilter}
 
 
 def _safe_name(path: str) -> str:
@@ -288,9 +427,9 @@ class ProtoView:
     descriptor: str | Path | bytes
     message_type: str
     blob_field: str = "proto_data"
-    columns: list[ProtoColumn | OneofColumn] = []
-    fixed_filters: list[OneofFilter | FieldFilter] = []
-    dynamic_filters: list[DynamicFilter] = []
+    columns: list[ProtoColumn | OneofColumn | ModelColumn] = []
+    fixed_filters: list[OneofFilter | FieldFilter | ModelFilter] = []
+    dynamic_filters: list[DynamicFilter | ModelDynamicFilter] = []
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -334,7 +473,7 @@ class ProtoView:
         params = params or {}
         annotations: dict = {}
 
-        # Column annotations
+        # Column annotations (ModelColumn is already on the model — no annotation)
         for col in self.columns:
             if isinstance(col, ProtoColumn):
                 annotations[col.name] = self._extract(col.path, col.output_field)
@@ -351,11 +490,14 @@ class ProtoView:
                 ann = f"_ff_{_safe_name(f.path)}"
                 if ann not in annotations:
                     annotations[ann] = self._extract(f.path, f.output_field)
+            # ModelFilter: no annotation needed
 
         # Dynamic-filter annotations (only when the param is supplied)
         for df in self.dynamic_filters:
             if not params.get(df.name):
                 continue
+            if isinstance(df, ModelDynamicFilter):
+                continue  # model field — no annotation needed
             ann = f"_df_{df.name}"
             if ann not in annotations:
                 annotations[ann] = self._extract(df.path, df.output_field)
@@ -383,14 +525,21 @@ class ProtoView:
                 ann = f"_ff_{_safe_name(f.path)}"
                 key = ann if f.lookup == "exact" else f"{ann}__{f.lookup}"
                 kwargs[key] = f.value
+            elif isinstance(f, ModelFilter):
+                key = f.field_name if f.lookup == "exact" else f"{f.field_name}__{f.lookup}"
+                kwargs[key] = f.value
 
         for df in self.dynamic_filters:
             value = params.get(df.name)
             if not value:
                 continue
-            ann = f"_df_{df.name}"
-            key = ann if df.lookup == "exact" else f"{ann}__{df.lookup}"
-            kwargs[key] = value
+            if isinstance(df, ModelDynamicFilter):
+                key = df.field_name if df.lookup == "exact" else f"{df.field_name}__{df.lookup}"
+                kwargs[key] = value
+            else:
+                ann = f"_df_{df.name}"
+                key = ann if df.lookup == "exact" else f"{ann}__{df.lookup}"
+                kwargs[key] = value
 
         return kwargs
 
@@ -498,7 +647,154 @@ class ProtoView:
                 columns.append(col_cls.from_dict(d))
         instance.columns = columns
 
-        instance.dynamic_filters = [
-            DynamicFilter.from_dict(d) for d in config.get("dynamic_filters", [])
-        ]
+        dyn_filters = []
+        for d in config.get("dynamic_filters", []):
+            df_cls = _DYNAMIC_FILTER_TYPES.get(d.get("type", "proto"), DynamicFilter)
+            dyn_filters.append(df_cls.from_dict(d))
+        instance.dynamic_filters = dyn_filters
         return instance
+
+
+# ---------------------------------------------------------------------------
+# View context builder
+# ---------------------------------------------------------------------------
+
+
+def build_proto_view_context(
+    proto_view: "ProtoView",
+    queryset,
+    params,
+    *,
+    sort_param: str = "sort",
+    extra_annotations: dict | None = None,
+    extra_sort_columns: list[str] | None = None,
+    limit: int = 100,
+) -> dict:
+    """
+    Apply *proto_view* to *queryset*, sort, materialise rows, and return a
+    template context dict ready for use with the built-in
+    ``django_sqlite_protobuf/proto_table.html`` template (or any custom
+    template that expects the same variables).
+
+    Parameters
+    ----------
+    proto_view:
+        A :class:`ProtoView` instance already configured with columns and
+        filters.
+    queryset:
+        Base queryset to annotate and filter (e.g.
+        ``MyModel.objects.all()``).
+    params:
+        Dict of user-supplied parameters — typically ``request.GET``
+        (a Django ``QueryDict`` is accepted too).
+    sort_param:
+        Name of the query-string key that controls ordering.  Defaults to
+        ``"sort"``.  The value is a column name, optionally prefixed with
+        ``"-"`` for descending order.
+    extra_annotations:
+        Additional ORM annotations to apply after :meth:`ProtoView.apply`.
+        Keys are annotation names; values are Django expression objects.
+        These names are also materialised into each row dict and get
+        sortable column-header URLs.
+    extra_sort_columns:
+        Names of extra sortable columns that are not declared on the view
+        (e.g. columns added by *extra_annotations*).  These are included
+        when validating the current sort value.  If *extra_annotations* is
+        provided its keys are implicitly included, so this parameter is only
+        needed when sorting a column that comes from elsewhere (e.g. already
+        on the model).
+    limit:
+        Maximum number of rows to materialise.  Defaults to 100.
+
+    Returns
+    -------
+    dict
+        Keys:
+
+        ``columns``
+            The view's column objects (for template iteration).
+        ``rows``
+            List of plain dicts, one per materialised row.  Keys are column
+            names plus any *extra_annotations* names.
+        ``col_sort_urls``
+            ``{col_name: url_string}`` mapping for sortable column headers.
+            Clicking toggles between ascending and descending.
+        ``sort``
+            Current sort value from *params* (may be empty string).
+        ``filter_form_fields``
+            Output of :meth:`ProtoView.filter_form_fields` — list of dicts
+            with ``name``, ``label``, ``lookup`` keys.
+        ``active_params``
+            *params* with the sort key removed; useful for passing filter
+            values back to a search form via hidden inputs.
+        ``total``
+            Total count of matching rows (before the *limit* slice).
+
+    Example
+    -------
+    ::
+
+        def my_view(request):
+            view = MyProtoView()
+            ctx = build_proto_view_context(
+                view,
+                MyModel.objects.all(),
+                request.GET,
+            )
+            return render(request, \"myapp/list.html\", ctx)
+
+    Template (minimal)::
+
+        {% include \"django_sqlite_protobuf/proto_table.html\" %}
+    """
+    # Normalise params to a plain dict so we can mutate copies safely.
+    if hasattr(params, "dict"):
+        params_dict = params.dict()
+    else:
+        params_dict = dict(params)
+
+    qs = proto_view.apply(queryset, params_dict)
+
+    if extra_annotations:
+        qs = qs.annotate(**extra_annotations)
+
+    extra_names = list(extra_annotations or {})
+    extra_sort = list(extra_sort_columns or []) + extra_names
+
+    sort = params_dict.get(sort_param, "")
+    valid_sort = proto_view.sortable_columns() + extra_sort
+    if sort.lstrip("-") in valid_sort:
+        qs = qs.order_by(sort)
+
+    total = qs.count()
+
+    columns = proto_view.columns
+    rows = []
+    for record in qs[:limit]:
+        row = {}
+        for col in columns:
+            row[col.name] = getattr(record, col.name, None)
+        for name in extra_names:
+            row[name] = getattr(record, name, None)
+        rows.append(row)
+
+    def _sort_url(col_name: str) -> str:
+        new_sort = f"-{col_name}" if sort == col_name else col_name
+        p = {**params_dict, sort_param: new_sort}
+        return "?" + urlencode(p, doseq=True)
+
+    col_sort_urls = {col.name: _sort_url(col.name) for col in columns}
+    for name in extra_names:
+        col_sort_urls[name] = _sort_url(name)
+
+    active_params = {k: v for k, v in params_dict.items() if k != sort_param}
+
+    return {
+        "columns": columns,
+        "rows": rows,
+        "col_sort_urls": col_sort_urls,
+        "sort": sort,
+        "filter_form_fields": proto_view.filter_form_fields(),
+        "active_params": active_params,
+        "total": total,
+    }
