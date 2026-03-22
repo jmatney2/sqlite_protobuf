@@ -107,20 +107,25 @@ class ProtoColumn:
     output_field: Any = None
     verbose_name: str = ""
     sortable: bool = True
+    badges: dict | None = None  # {value: "bg-primary"} → renders a Bootstrap badge
 
     def __post_init__(self) -> None:
         if not self.verbose_name:
             self.verbose_name = self.name.replace("_", " ").title()
 
     def to_dict(self) -> dict:
-        return {"type": "proto", "name": self.name, "path": self.path,
-                "verbose_name": self.verbose_name, "sortable": self.sortable}
+        d = {"type": "proto", "name": self.name, "path": self.path,
+             "verbose_name": self.verbose_name, "sortable": self.sortable}
+        if self.badges is not None:
+            d["badges"] = self.badges
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "ProtoColumn":
         return cls(name=d["name"], path=d["path"],
                    verbose_name=d.get("verbose_name", ""),
-                   sortable=d.get("sortable", True))
+                   sortable=d.get("sortable", True),
+                   badges=d.get("badges"))
 
 
 @dataclass
@@ -148,20 +153,25 @@ class OneofColumn:
     oneof_name: str
     verbose_name: str = ""
     sortable: bool = True
+    badges: dict | None = None  # {value: "bg-primary"} → renders a Bootstrap badge
 
     def __post_init__(self) -> None:
         if not self.verbose_name:
             self.verbose_name = self.name.replace("_", " ").title()
 
     def to_dict(self) -> dict:
-        return {"type": "oneof", "name": self.name, "oneof_name": self.oneof_name,
-                "verbose_name": self.verbose_name, "sortable": self.sortable}
+        d = {"type": "oneof", "name": self.name, "oneof_name": self.oneof_name,
+             "verbose_name": self.verbose_name, "sortable": self.sortable}
+        if self.badges is not None:
+            d["badges"] = self.badges
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "OneofColumn":
         return cls(name=d["name"], oneof_name=d["oneof_name"],
                    verbose_name=d.get("verbose_name", ""),
-                   sortable=d.get("sortable", True))
+                   sortable=d.get("sortable", True),
+                   badges=d.get("badges"))
 
 
 # ---------------------------------------------------------------------------
@@ -230,20 +240,28 @@ class DynamicFilter:
     output_field: Any = None
     label: str = ""
     lookup: str = "exact"
+    choices: list | None = None  # renders a <select>; list of str or (value, label) tuples
+    multiple: bool = False       # True → <select multiple> + __in lookup
 
     def __post_init__(self) -> None:
         if not self.label:
             self.label = self.name.replace("_", " ").title()
 
     def to_dict(self) -> dict:
-        return {"type": "proto", "name": self.name, "path": self.path,
-                "label": self.label, "lookup": self.lookup}
+        d = {"type": "proto", "name": self.name, "path": self.path,
+             "label": self.label, "lookup": self.lookup}
+        if self.choices is not None:
+            d["choices"] = _normalize_choices(self.choices)
+            d["multiple"] = self.multiple
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "DynamicFilter":
         return cls(name=d["name"], path=d["path"],
                    label=d.get("label", ""),
-                   lookup=d.get("lookup", "exact"))
+                   lookup=d.get("lookup", "exact"),
+                   choices=d.get("choices"),
+                   multiple=d.get("multiple", False))
 
 
 # ---------------------------------------------------------------------------
@@ -288,20 +306,25 @@ class ModelColumn:
     name: str
     verbose_name: str = ""
     sortable: bool = True
+    badges: dict | None = None  # {value: "bg-primary"} → renders a Bootstrap badge
 
     def __post_init__(self) -> None:
         if not self.verbose_name:
             self.verbose_name = self.name.replace("_", " ").title()
 
     def to_dict(self) -> dict:
-        return {"type": "model", "name": self.name,
-                "verbose_name": self.verbose_name, "sortable": self.sortable}
+        d = {"type": "model", "name": self.name,
+             "verbose_name": self.verbose_name, "sortable": self.sortable}
+        if self.badges is not None:
+            d["badges"] = self.badges
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "ModelColumn":
         return cls(name=d["name"],
                    verbose_name=d.get("verbose_name", ""),
-                   sortable=d.get("sortable", True))
+                   sortable=d.get("sortable", True),
+                   badges=d.get("badges"))
 
 
 @dataclass
@@ -367,20 +390,28 @@ class ModelDynamicFilter:
     field_name: str
     label: str = ""
     lookup: str = "exact"
+    choices: list | None = None  # renders a <select>; list of str or (value, label) tuples
+    multiple: bool = False       # True → <select multiple> + __in lookup
 
     def __post_init__(self) -> None:
         if not self.label:
             self.label = self.name.replace("_", " ").title()
 
     def to_dict(self) -> dict:
-        return {"type": "model", "name": self.name, "field_name": self.field_name,
-                "label": self.label, "lookup": self.lookup}
+        d = {"type": "model", "name": self.name, "field_name": self.field_name,
+             "label": self.label, "lookup": self.lookup}
+        if self.choices is not None:
+            d["choices"] = _normalize_choices(self.choices)
+            d["multiple"] = self.multiple
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "ModelDynamicFilter":
         return cls(name=d["name"], field_name=d["field_name"],
                    label=d.get("label", ""),
-                   lookup=d.get("lookup", "exact"))
+                   lookup=d.get("lookup", "exact"),
+                   choices=d.get("choices"),
+                   multiple=d.get("multiple", False))
 
 
 # ---------------------------------------------------------------------------
@@ -389,6 +420,34 @@ class ModelDynamicFilter:
 
 _COLUMN_TYPES = {"proto": ProtoColumn, "oneof": OneofColumn, "model": ModelColumn}
 _DYNAMIC_FILTER_TYPES = {"proto": DynamicFilter, "model": ModelDynamicFilter}
+
+
+def _normalize_choices(choices: list) -> list[tuple[str, str]]:
+    """Normalise choices to a list of (value, label) string tuples."""
+    result = []
+    for c in choices:
+        if isinstance(c, (list, tuple)):
+            result.append((str(c[0]), str(c[1])))
+        else:
+            result.append((str(c), str(c)))
+    return result
+
+
+def _get_param(params, name: str, multiple: bool = False):
+    """
+    Extract a value from *params*, handling QueryDict multi-values.
+
+    Returns a non-empty list when *multiple* is True, a non-empty string
+    otherwise, or ``None`` when the key is absent / blank.
+    """
+    if multiple:
+        vals = params.getlist(name) if hasattr(params, "getlist") else (
+            [params[name]] if params.get(name) else []
+        )
+        vals = [v for v in vals if v]
+        return vals or None
+    val = params.get(name)
+    return val if val else None
 
 
 def _safe_name(path: str) -> str:
@@ -494,7 +553,7 @@ class ProtoView:
 
         # Dynamic-filter annotations (only when the param is supplied)
         for df in self.dynamic_filters:
-            if not params.get(df.name):
+            if not _get_param(params, df.name, getattr(df, "multiple", False)):
                 continue
             if isinstance(df, ModelDynamicFilter):
                 continue  # model field — no annotation needed
@@ -530,15 +589,17 @@ class ProtoView:
                 kwargs[key] = f.value
 
         for df in self.dynamic_filters:
-            value = params.get(df.name)
+            multiple = getattr(df, "multiple", False)
+            value = _get_param(params, df.name, multiple)
             if not value:
                 continue
+            lookup = "in" if multiple else df.lookup
             if isinstance(df, ModelDynamicFilter):
-                key = df.field_name if df.lookup == "exact" else f"{df.field_name}__{df.lookup}"
+                key = df.field_name if lookup == "exact" else f"{df.field_name}__{lookup}"
                 kwargs[key] = value
             else:
                 ann = f"_df_{df.name}"
-                key = ann if df.lookup == "exact" else f"{ann}__{df.lookup}"
+                key = ann if lookup == "exact" else f"{ann}__{lookup}"
                 kwargs[key] = value
 
         return kwargs
@@ -586,12 +647,18 @@ class ProtoView:
         """
         Metadata for each dynamic filter, suitable for rendering a search form.
 
-        Returns a list of dicts with keys ``name``, ``label``, ``lookup``.
+        Returns a list of dicts with keys ``name``, ``label``, ``lookup``,
+        and optionally ``choices`` (list of ``(value, label)`` tuples) and
+        ``multiple`` (bool) for select-based filters.
         """
-        return [
-            {"name": df.name, "label": df.label, "lookup": df.lookup}
-            for df in self.dynamic_filters
-        ]
+        result = []
+        for df in self.dynamic_filters:
+            d = {"name": df.name, "label": df.label, "lookup": df.lookup}
+            if getattr(df, "choices", None) is not None:
+                d["choices"] = _normalize_choices(df.choices)
+                d["multiple"] = getattr(df, "multiple", False)
+            result.append(d)
+        return result
 
     # ------------------------------------------------------------------
     # Serialization — user-defined column/filter customisation
@@ -747,13 +814,26 @@ def build_proto_view_context(
 
         {% include \"django_sqlite_protobuf/proto_table.html\" %}
     """
-    # Normalise params to a plain dict so we can mutate copies safely.
+    # Keep the original params for apply() so QueryDict.getlist() works for
+    # multi-select filters.  Build a flat dict for scalar lookups and a
+    # multi-value dict (values may be lists) for URL construction.
     if hasattr(params, "dict"):
-        params_dict = params.dict()
+        params_flat = params.dict()
     else:
-        params_dict = dict(params)
+        params_flat = dict(params)
 
-    qs = proto_view.apply(queryset, params_dict)
+    # Start with the flat dict, then overlay list values for every
+    # multiple-choice filter so sort URLs preserve all selected options.
+    params_multi: dict = dict(params_flat)
+    for df in proto_view.dynamic_filters:
+        if getattr(df, "multiple", False):
+            vals = _get_param(params, df.name, multiple=True)
+            if vals:
+                params_multi[df.name] = vals
+
+    # Pass original params so get_annotations / get_filter_kwargs can call
+    # getlist() for multiple-choice filters.
+    qs = proto_view.apply(queryset, params)
 
     if extra_annotations:
         qs = qs.annotate(**extra_annotations)
@@ -761,7 +841,7 @@ def build_proto_view_context(
     extra_names = list(extra_annotations or {})
     extra_sort = list(extra_sort_columns or []) + extra_names
 
-    sort = params_dict.get(sort_param, "")
+    sort = params_flat.get(sort_param, "")
     valid_sort = proto_view.sortable_columns() + extra_sort
     if sort.lstrip("-") in valid_sort:
         qs = qs.order_by(sort)
@@ -780,21 +860,37 @@ def build_proto_view_context(
 
     def _sort_url(col_name: str) -> str:
         new_sort = f"-{col_name}" if sort == col_name else col_name
-        p = {**params_dict, sort_param: new_sort}
+        p = {**params_multi, sort_param: new_sort}
         return "?" + urlencode(p, doseq=True)
 
     col_sort_urls = {col.name: _sort_url(col.name) for col in columns}
     for name in extra_names:
         col_sort_urls[name] = _sort_url(name)
 
-    active_params = {k: v for k, v in params_dict.items() if k != sort_param}
+    active_params = {k: v for k, v in params_flat.items() if k != sort_param}
+
+    # Hidden params: active_params minus filter-field names (they have their
+    # own inputs in the form so we don't want to duplicate them as hidden).
+    filter_names = {df.name for df in proto_view.dynamic_filters}
+    hidden_params = {k: v for k, v in active_params.items() if k not in filter_names}
+
+    # Enrich filter_form_fields with current selected value(s) so the template
+    # can pre-select options without extra dict lookups.
+    form_fields = proto_view.filter_form_fields()
+    for f in form_fields:
+        df = next((d for d in proto_view.dynamic_filters if d.name == f["name"]), None)
+        if df and getattr(df, "multiple", False):
+            f["selected"] = _get_param(params, f["name"], multiple=True) or []
+        else:
+            f["selected"] = params_flat.get(f["name"], "")
 
     return {
         "columns": columns,
         "rows": rows,
         "col_sort_urls": col_sort_urls,
         "sort": sort,
-        "filter_form_fields": proto_view.filter_form_fields(),
+        "filter_form_fields": form_fields,
         "active_params": active_params,
+        "hidden_params": hidden_params,
         "total": total,
     }

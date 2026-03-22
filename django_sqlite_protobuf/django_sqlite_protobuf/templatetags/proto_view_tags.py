@@ -10,3 +10,9 @@ def dict_get(d, key):
         return d[key]
     except (KeyError, TypeError):
         return None
+
+
+@register.filter
+def list_contains(lst, value):
+    """Return True if *value* is in *lst* (handles None gracefully)."""
+    return value in (lst or [])

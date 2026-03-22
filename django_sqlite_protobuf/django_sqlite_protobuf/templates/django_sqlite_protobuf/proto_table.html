@@ -1,43 +1,58 @@
-{% load proto_view_tags %}
-{# -----------------------------------------------------------------------
-   django_sqlite_protobuf/proto_table.html
-   Renders a filter form (when dynamic filters are configured) and a
-   sortable data table from the context produced by build_proto_view_context().
+{% load proto_view_tags %}{% comment %}
+django_sqlite_protobuf/proto_table.html
+Renders a filter form (when dynamic filters are configured) and a
+sortable data table from the context produced by build_proto_view_context().
 
-   Required context variables (all produced by build_proto_view_context):
-     columns            — list of column objects (ProtoColumn, OneofColumn, ModelColumn)
-     rows               — list of plain dicts, one per row
-     col_sort_urls      — {col_name: url} for sortable headers
-     sort               — current sort value (may be empty string)
-     filter_form_fields — list of {name, label, lookup} dicts
-     active_params      — params dict without the sort key
+Required context variables (all produced by build_proto_view_context):
+  columns            — list of column objects (ProtoColumn, OneofColumn, ModelColumn)
+  rows               — list of plain dicts, one per row
+  col_sort_urls      — {col_name: url} for sortable headers
+  sort               — current sort value (may be empty string)
+  filter_form_fields — list of {name, label, lookup} dicts
+  hidden_params      — params to preserve as hidden inputs (excludes filter fields)
 
-   Optional context variables:
-     extra_columns      — list of {name, verbose_name, sortable} dicts for
-                          columns that come from extra_annotations (e.g.
-                          computed via Coalesce) rather than ProtoView.columns
-     proto_empty_message — text shown when rows is empty
-
-   CSS customisation via context (all have defaults):
-     proto_table_class          — <table> CSS class
-     proto_table_container_class — outer div class
-     proto_thead_class          — <thead> CSS class
-     proto_sort_link_class      — sort <a> CSS class
-     proto_null_class           — null-cell CSS class
-   ----------------------------------------------------------------------- #}
+Optional context variables:
+  extra_columns        — list of {name, verbose_name, sortable} dicts for columns
+                         added via extra_annotations in build_proto_view_context
+  proto_empty_message  — text shown when rows is empty
+  proto_table_class          — <table> CSS class
+  proto_table_container_class — outer div class
+  proto_thead_class          — <thead> CSS class
+  proto_sort_link_class      — sort <a> CSS class
+  proto_null_class           — null-cell CSS class
+{% endcomment %}
 
 {% if filter_form_fields %}
 <form method="get" class="d-flex gap-2 flex-wrap align-items-center mb-3">
-  {% for k, v in active_params.items %}
+  {% for k, v in hidden_params.items %}
   <input type="hidden" name="{{ k }}" value="{{ v }}">
   {% endfor %}
   {% for f in filter_form_fields %}
+    {% if f.choices %}
+      {% if f.multiple %}
+  <select name="{{ f.name }}" multiple
+          class="form-select form-select-sm"
+          style="min-width:140px">
+        {% for choice_val, choice_label in f.choices %}
+    <option value="{{ choice_val }}"{% if choice_val in f.selected %}selected{% endif %}>{{ choice_label }}</option>
+        {% endfor %}
+  </select>
+      {% else %}
+  <select name="{{ f.name }}" class="form-select form-select-sm" style="min-width:140px">
+    <option value="">{{ f.label }}</option>
+        {% for choice_val, choice_label in f.choices %}
+    <option value="{{ choice_val }}"{% if f.selected == choice_val %} selected{% endif %}>{{ choice_label }}</option>
+        {% endfor %}
+  </select>
+      {% endif %}
+    {% else %}
   <input type="text"
          name="{{ f.name }}"
-         value="{{ active_params|dict_get:f.name|default:'' }}"
+         value="{{ f.selected|default:'' }}"
          placeholder="{{ f.label }}"
          class="form-control form-control-sm"
          style="width:180px">
+    {% endif %}
   {% endfor %}
   <button type="submit" class="btn btn-sm btn-outline-primary">Search</button>
   <a href="?" class="btn btn-sm btn-outline-secondary">Clear</a>
@@ -84,12 +99,16 @@
       <tr>
         {% for col in columns %}
         {% with val=row|dict_get:col.name %}
-        <td>{% if val is not None %}{{ val }}{% else %}<span class="{{ proto_null_class|default:'text-muted fst-italic' }}">—</span>{% endif %}</td>
+          {% with badge_class=col.badges|dict_get:val %}
+        <td>{% if val is not None %}{% if badge_class %}<span class="badge {{ badge_class }}">{{ val }}</span>{% else %}{{ val }}{% endif %}{% else %}<span class="{{ proto_null_class|default:'text-muted fst-italic' }}">—</span>{% endif %}</td>
+          {% endwith %}
         {% endwith %}
         {% endfor %}
         {% for xcol in extra_columns %}
         {% with val=row|dict_get:xcol.name %}
-        <td>{% if val is not None %}{{ val }}{% else %}<span class="{{ proto_null_class|default:'text-muted fst-italic' }}">—</span>{% endif %}</td>
+          {% with badge_class=xcol.badges|dict_get:val %}
+        <td>{% if val is not None %}{% if badge_class %}<span class="badge {{ badge_class }}">{{ val }}</span>{% else %}{{ val }}{% endif %}{% else %}<span class="{{ proto_null_class|default:'text-muted fst-italic' }}">—</span>{% endif %}</td>
+          {% endwith %}
         {% endwith %}
         {% endfor %}
       </tr>

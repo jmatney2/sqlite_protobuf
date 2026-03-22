@@ -49,6 +49,7 @@ from django.db.models import IntegerField
 from django_sqlite_protobuf.proto_view import (
     DynamicFilter,
     FieldFilter,
+    ModelDynamicFilter,
     OneofColumn,
     OneofFilter,
     ProtoColumn,
@@ -67,7 +68,8 @@ class AllRecordsView(ProtoView):
     blob_field = "proto_data"
 
     columns = [
-        OneofColumn("source_type", "source", verbose_name="Type"),
+        OneofColumn("source_type", "source", verbose_name="Type",
+                    badges={"branch_a": "bg-primary", "branch_b": "bg-success"}),
         ProtoColumn("branch_a_label", "branch_a.label", verbose_name="A: Label"),
         ProtoColumn(
             "branch_a_value", "branch_a.value",
@@ -80,8 +82,16 @@ class AllRecordsView(ProtoView):
     # No fixed filters — every row is included.
     # combined_label (COALESCE of the two branch labels) is added by the view
     # function after apply(), to keep the ProtoView definition self-contained.
+    # source_type is already annotated by OneofColumn above, so
+    # ModelDynamicFilter filters on the annotation directly without
+    # needing a separate protobuf_extract call.
     dynamic_filters = [
-        DynamicFilter("type", "source", lookup="exact", label="Branch type"),
+        ModelDynamicFilter(
+            "type", "source_type",
+            choices=[("branch_a", "Branch A"), ("branch_b", "Branch B")],
+            multiple=True,
+            label="Branch type",
+        ),
     ]
 
 
