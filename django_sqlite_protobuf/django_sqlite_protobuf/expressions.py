@@ -63,10 +63,18 @@ from django.db.models.expressions import RawSQL, Value
 def _descriptor_bytes(descriptor: "str | os.PathLike | bytes | memoryview") -> bytes:
     """Normalise a descriptor argument to raw bytes.
 
-    Accepts plain ``str``, any ``os.PathLike`` (``pathlib.Path``,
-    ``pathlib.PurePosixPath``, etc. — Django migrations serialise
-    ``pathlib.Path`` as ``pathlib.PurePosixPath``), or raw ``bytes``.
+    Accepts:
+
+    * :class:`~django_sqlite_protobuf.descriptors.DescriptorRef` — resolved
+      from the database (cached per-process).
+    * ``str`` / any ``os.PathLike`` (``pathlib.Path``, ``pathlib.PurePosixPath``,
+      etc.) — read from the filesystem.
+    * Raw ``bytes`` / ``memoryview`` — used directly.
     """
+    # Import here to avoid circular imports at module level.
+    from django_sqlite_protobuf.descriptors import DescriptorRef
+    if isinstance(descriptor, DescriptorRef):
+        return descriptor.resolve()
     if isinstance(descriptor, (str, os.PathLike)):
         return Path(descriptor).read_bytes()
     return bytes(descriptor)

@@ -1,12 +1,11 @@
-from pathlib import Path
-
 import django_tables2 as tables
 from django.db.models import DateTimeField
 
+from django_sqlite_protobuf.descriptors import DescriptorRef
 from django_sqlite_protobuf.tables import ProtobufTable
 from django_sqlite_protobuf.utils import ProtoField
 
-DESCRIPTOR = Path(__file__).parent / "descriptors" / "test.pb"
+DESCRIPTOR = DescriptorRef("test")
 MESSAGE = "test.Person"
 
 

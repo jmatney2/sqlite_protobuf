@@ -1,114 +1,109 @@
-{% load proto_extras %}
+{% load proto_extras static %}
 <!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Records · sqlite_protobuf Demo</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-  <style>
-    body { background: #f8f9fa; }
-    code { background: #e9ecef; padding: .1em .35em; border-radius: .25rem; }
-    .proto-sort-link:hover { text-decoration: underline; }
-    pre { font-size: .8rem; }
-  </style>
+  <link rel="stylesheet" href="{% static 'people/records.css' %}">
 </head>
 <body>
 
-<nav class="navbar navbar-dark bg-dark mb-4">
-  <div class="container">
-    <span class="navbar-brand fw-bold">sqlite_protobuf Demo</span>
-    <div class="d-flex gap-3">
-      <a href="{% url 'index' %}" class="nav-link text-white-50">People</a>
-      <a href="{% url 'records' %}" class="nav-link text-white fw-semibold">Records (ProtoView)</a>
+<nav class="demo-nav">
+  <div class="demo-nav__inner">
+    <span class="demo-nav__brand">sqlite_protobuf Demo</span>
+    <div class="demo-nav__links">
+      <a href="{% url 'index' %}" class="demo-nav__link">People</a>
+      <a href="{% url 'records' %}" class="demo-nav__link demo-nav__link--active">Records (ProtoView)</a>
     </div>
   </div>
 </nav>
 
-<div class="container">
+<div class="demo-page">
 
   <!-- Controls -->
-  <div class="d-flex align-items-center gap-3 mb-4 flex-wrap">
-    <form method="post" action="{% url 'add_random_record' %}" class="d-flex gap-2 align-items-center">
+  <div class="demo-controls">
+    <form method="post" action="{% url 'add_random_record' %}">
       {% csrf_token %}
-      <select name="count" class="form-select form-select-sm" style="width:auto">
+      <select name="count" class="demo-select">
         <option value="1">1</option>
         <option value="5">5</option>
         <option value="10" selected>10</option>
         <option value="25">25</option>
         <option value="50">50</option>
       </select>
-      <button type="submit" class="btn btn-primary btn-sm">＋ Generate Random Records</button>
+      <button type="submit" class="demo-btn demo-btn--primary">＋ Generate Random Records</button>
     </form>
     <form method="post" action="{% url 'clear_all_records' %}"
           onsubmit="return confirm('Delete all records?')">
       {% csrf_token %}
-      <button type="submit" class="btn btn-outline-danger btn-sm">Clear All</button>
+      <button type="submit" class="demo-btn demo-btn--danger">Clear All</button>
     </form>
-    <span class="text-muted small ms-auto">{{ total_scoped }} shown · {{ total_all }} total</span>
+    <span class="demo-counter">{{ total_scoped }} shown · {{ total_all }} total</span>
   </div>
 
   <!-- View tabs -->
-  <div class="card mb-3">
-    <div class="card-body py-2">
-      <div class="d-flex gap-2 flex-wrap align-items-center">
-        {% for key, label in view_labels.items %}
-        <a href="?view={{ key }}"
-           class="btn btn-sm {% if active_view == key %}btn-secondary{% else %}btn-outline-secondary{% endif %}">
-          {{ label }}
-        </a>
-        {% endfor %}
-      </div>
+  <div class="demo-card">
+    <div class="demo-tabs">
+      {% for key, label in view_labels.items %}
+      <a href="?view={{ key }}"
+         class="demo-btn {% if active_view == key %}demo-btn--active{% else %}demo-btn--outline{% endif %}">
+        {{ label }}
+      </a>
+      {% endfor %}
     </div>
   </div>
 
   <!-- Main table -->
-  <div class="card mb-4">
-    <div class="card-header d-flex justify-content-between align-items-center">
-      <span class="fw-semibold">
+  <div class="demo-card">
+    <div class="demo-card__header">
+      <span>
         {% for key, label in view_labels.items %}{% if key == active_view %}{{ label }}{% endif %}{% endfor %}
-        <span class="badge bg-secondary ms-1">{{ total_scoped }}</span>
+        <span class="demo-count">{{ total_scoped }}</span>
       </span>
-      <span class="text-muted small">
-        Columns from <code>ProtoView.columns</code> · click headers to sort
-      </span>
+      <span class="demo-card__hint">Columns from <code>ProtoView.columns</code> · click headers to sort</span>
     </div>
-    {% include "django_sqlite_protobuf/proto_table.html" with proto_empty_message="No records yet — generate some above." %}
+    {% include "django_sqlite_protobuf/proto_table.html" with
+        proto_table_class="records-table"
+        proto_table_container_class=""
+        proto_thead_class=""
+        proto_sort_link_class="records-sort-link"
+        proto_null_class="records-null"
+        proto_filter_class="records-filter"
+        proto_btn_search_class="demo-btn demo-btn--primary"
+        proto_btn_clear_class="demo-btn demo-btn--outline"
+        proto_empty_message="No records yet — generate some above." %}
   </div>
 
   <!-- View definition + serialised config -->
-  <div class="row g-4 mb-4">
-    <div class="col-md-6">
-      <div class="card h-100">
-        <div class="card-header fw-semibold">
-          View Definition
-          <span class="badge bg-light text-dark border ms-1" style="font-size:.7rem">record_views.py</span>
-        </div>
-        <div class="card-body p-0">
-          {% if active_view == "all" %}
-          <pre class="m-0 p-3">class AllRecordsView(ProtoView):
-    descriptor   = DESCRIPTOR
+  <div class="demo-panels">
+    <div class="demo-card">
+      <div class="demo-card__header">
+        View Definition
+        <span class="demo-label">record_views.py</span>
+      </div>
+      <div class="demo-card__body" style="padding:0">
+        {% if active_view == "all" %}
+        <pre style="padding:.75rem .9rem">class AllRecordsView(ProtoView):
+    descriptor   = DescriptorRef("test")
     message_type = "test.Record"
-    blob_field   = "proto_data"
 
-    # No fixed_filters — all rows included
     columns = [
-        OneofColumn("source_type", "source"),
+        OneofColumn("source_type", "source",
+                    badges={"branch_a": "branch-a",
+                            "branch_b": "branch-b"}),
         ProtoColumn("branch_a_label", "branch_a.label"),
         ProtoColumn("branch_a_value", "branch_a.value",
                     output_field=IntegerField()),
         ProtoColumn("branch_b_label", "branch_b.label"),
         ProtoColumn("branch_b_category", "branch_b.category"),
     ]</pre>
-          {% elif active_view == "branch_a" %}
-          <pre class="m-0 p-3">class BranchAView(ProtoView):
-    descriptor   = DESCRIPTOR
+        {% elif active_view == "branch_a" %}
+        <pre style="padding:.75rem .9rem">class BranchAView(ProtoView):
+    descriptor   = DescriptorRef("test")
     message_type = "test.Record"
-    blob_field   = "proto_data"
 
-    fixed_filters = [
-        OneofFilter("source", "branch_a"),
-    ]
+    fixed_filters = [OneofFilter("source", "branch_a")]
     columns = [
         ProtoColumn("label", "branch_a.label"),
         ProtoColumn("value", "branch_a.value",
@@ -120,15 +115,12 @@
         DynamicFilter("min_value", "branch_a.value",
                       lookup="gte"),
     ]</pre>
-          {% else %}
-          <pre class="m-0 p-3">class BranchBView(ProtoView):
-    descriptor   = DESCRIPTOR
+        {% else %}
+        <pre style="padding:.75rem .9rem">class BranchBView(ProtoView):
+    descriptor   = DescriptorRef("test")
     message_type = "test.Record"
-    blob_field   = "proto_data"
 
-    fixed_filters = [
-        OneofFilter("source", "branch_b"),
-    ]
+    fixed_filters = [OneofFilter("source", "branch_b")]
     columns = [
         ProtoColumn("label", "branch_b.label"),
         ProtoColumn("category", "branch_b.category"),
@@ -139,161 +131,99 @@
         DynamicFilter("category", "branch_b.category",
                       lookup="exact"),
     ]</pre>
-          {% endif %}
-        </div>
+        {% endif %}
       </div>
     </div>
 
-    <div class="col-md-6">
-      <div class="card h-100">
-        <div class="card-header fw-semibold">
-          Serialised Config
-          <span class="badge bg-light text-dark border ms-1" style="font-size:.7rem">view.serialize_config()</span>
-        </div>
-        <div class="card-body p-0">
-          <pre class="m-0 p-3">{{ config_json }}</pre>
-        </div>
-        <div class="card-footer text-muted small">
-          Save this JSON per-user to let them choose their own columns and
-          filters.  Restore with
-          <code>{{ active_view|capfirst }}View.from_config(config)</code> —
-          fixed filters are always preserved from the class definition.
-        </div>
+    <div class="demo-card">
+      <div class="demo-card__header">
+        Serialised Config
+        <span class="demo-label">view.serialize_config()</span>
+      </div>
+      <div class="demo-card__body" style="padding:0">
+        <pre style="padding:.75rem .9rem">{{ config_json }}</pre>
+      </div>
+      <div class="demo-card__footer">
+        Save this JSON per-user to let them choose their own columns and
+        filters. Restore with
+        <code>{{ active_view|capfirst }}View.from_config(config)</code> —
+        fixed filters are always preserved from the class definition.
       </div>
     </div>
   </div>
 
-  <!-- How it works accordion -->
-  <div class="accordion mb-4" id="howItWorks">
-
-    <div class="accordion-item">
-      <h2 class="accordion-header">
-        <button class="accordion-button collapsed" type="button"
-                data-bs-toggle="collapse" data-bs-target="#collapseOneof">
-          oneOf: NULL for inactive branches + COALESCE
-        </button>
-      </h2>
-      <div id="collapseOneof" class="accordion-collapse collapse">
-        <div class="accordion-body">
-          <p>
-            <code>test.Record</code> has
-            <code>oneof source { BranchA branch_a; BranchB branch_b; }</code>.
-            Previously, querying an inactive branch returned the proto3 default
-            (empty string <code>""</code>), making <code>COALESCE</code> useless.
-            Now inactive branches return <code>NULL</code>:
-          </p>
-          <pre>-- branch_b is set; branch_a.label is now NULL (not "")
-SELECT
-  protobuf_extract(proto_data, :d, 'test.Record', 'branch_a.label')  -- NULL
-  protobuf_extract(proto_data, :d, 'test.Record', 'branch_b.label')  -- "north"
-  COALESCE(
+  <!-- How it works (details/summary — no JS required) -->
+  <details class="demo-details">
+    <summary>oneOf: NULL for inactive branches + COALESCE</summary>
+    <div class="demo-details__body">
+      <p>
+        <code>test.Record</code> has
+        <code>oneof source { BranchA branch_a; BranchB branch_b; }</code>.
+        Inactive branches return <code>NULL</code>, making <code>COALESCE</code> work correctly:
+      </p>
+      <pre>-- branch_b is set; branch_a.label returns NULL (not "")
+SELECT COALESCE(
     protobuf_extract(proto_data, :d, 'test.Record', 'branch_a.label'),
     protobuf_extract(proto_data, :d, 'test.Record', 'branch_b.label')
-  )  -- "north"  ✓
+)  -- "north"  ✓
 FROM people_recordentry;</pre>
-          <p class="mb-0">
-            The <strong>Combined Label</strong> column above is computed exactly
-            this way, via Django's <code>Coalesce()</code> expression applied after
-            <code>proto_view.apply()</code>.
-          </p>
-        </div>
-      </div>
+      <p>
+        The <strong>Combined Label</strong> column is computed exactly this way,
+        via Django's <code>Coalesce()</code> applied after <code>proto_view.apply()</code>.
+      </p>
     </div>
+  </details>
 
-    <div class="accordion-item">
-      <h2 class="accordion-header">
-        <button class="accordion-button collapsed" type="button"
-                data-bs-toggle="collapse" data-bs-target="#collapseWhichOneof">
-          protobuf_which_oneof() — sort and group by type
-        </button>
-      </h2>
-      <div id="collapseWhichOneof" class="accordion-collapse collapse">
-        <div class="accordion-body">
-          <p>
-            <code>protobuf_which_oneof(data, descriptor, message_type, oneof_name)</code>
-            returns the active field name as a string, or <code>NULL</code>.  The
-            <strong>Type</strong> column and sorting in <em>All Records</em> mode
-            are driven by this function via <code>OneofColumn</code>:
-          </p>
-          <pre>SELECT
-  protobuf_which_oneof(
+  <details class="demo-details">
+    <summary>protobuf_which_oneof() — sort and group by type</summary>
+    <div class="demo-details__body">
+      <p>
+        <code>protobuf_which_oneof(data, descriptor, message_type, oneof_name)</code>
+        returns the active field name as a string, or <code>NULL</code>.
+        The <strong>Type</strong> column and branch-type filter in <em>All Records</em>
+        mode use this via <code>OneofColumn</code>:
+      </p>
+      <pre>SELECT protobuf_which_oneof(
     proto_data, :d, 'test.Record', 'source'
-  ) AS source_type
+) AS source_type
 FROM people_recordentry
 ORDER BY source_type;   -- branch_a rows, then branch_b rows</pre>
-          <p class="mb-0">
-            In Django:
-            <code>qs = proto_view.apply(qs)</code> adds the <code>source_type</code>
-            annotation; <code>qs.order_by("source_type")</code> groups by branch.
-          </p>
-        </div>
-      </div>
     </div>
+  </details>
 
-    <div class="accordion-item">
-      <h2 class="accordion-header">
-        <button class="accordion-button collapsed" type="button"
-                data-bs-toggle="collapse" data-bs-target="#collapseGenerated">
-          Generated columns + indexes
-        </button>
-      </h2>
-      <div id="collapseGenerated" class="accordion-collapse collapse">
-        <div class="accordion-body">
-          <p>
-            For fields you query frequently, add a <strong>generated column</strong>
-            so SQLite caches the extracted value and it can be indexed:
-          </p>
-          <pre>-- Migration RunSQL:
-ALTER TABLE people_recordentry
-  ADD COLUMN branch_a_label TEXT GENERATED ALWAYS AS (
-    protobuf_extract(proto_data,
-                     X'&lt;descriptor_hex&gt;',
-                     'test.Record',
-                     'branch_a.label')
-  ) VIRTUAL;
-
-CREATE INDEX people_recordentry_branch_a_label
-    ON people_recordentry(branch_a_label);</pre>
-          <p>Or via the Django helper (requires Django 5.0+):</p>
-          <pre>from django_sqlite_protobuf.expressions import (
+  <details class="demo-details">
+    <summary>Generated columns + indexes (for scale)</summary>
+    <div class="demo-details__body">
+      <p>
+        For millions of rows, sorting via <code>protobuf_extract</code> requires
+        a full-table scan with per-row decode. Add a <strong>stored generated column</strong>
+        to pre-compute and index the value:
+      </p>
+      <pre>from django_sqlite_protobuf.expressions import (
     make_protobuf_generated_field,
-    make_protobuf_index,
     make_protobuf_which_oneof_generated_field,
 )
 
 class RecordEntry(models.Model):
-    proto_data     = models.BinaryField()
-    branch_a_label = make_protobuf_generated_field(
-        "proto_data", DESCRIPTOR,
-        "test.Record", "branch_a.label",
-        output_field=models.TextField(),
-        db_persist=True,   # STORED → indexable
-    )
+    proto_data  = models.BinaryField()
     source_type = make_protobuf_which_oneof_generated_field(
-        "proto_data", DESCRIPTOR,
+        "proto_data", DescriptorRef("test"),
         "test.Record", "source",
-        db_persist=True,
+        db_persist=True,          # STORED → indexable
     )
     class Meta:
         indexes = [
-            models.Index(fields=["branch_a_label"],
-                         name="recordentry_branch_a_label_idx"),
             models.Index(fields=["source_type"],
                          name="recordentry_source_type_idx"),
         ]</pre>
-          <p class="mb-0">
-            After the column exists, use <code>ModelColumn</code> and
-            <code>ModelDynamicFilter</code> in a <code>ProtoView</code> to
-            display and filter it directly — no protobuf extraction overhead
-            at query time.
-          </p>
-        </div>
-      </div>
+      <p>
+        After the column exists, use <code>ModelColumn</code> /
+        <code>ModelDynamicFilter</code> in a <code>ProtoView</code> — the value
+        is read directly from the index with no protobuf decoding at query time.
+      </p>
     </div>
+  </details>
 
-  </div><!-- /accordion -->
-
-</div><!-- /container -->
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+</div><!-- /demo-page -->
 </body>
 </html>

@@ -42,10 +42,9 @@ In Django model code this is:
                                     name="recordentry_branch_a_label_idx")]
 """
 
-from pathlib import Path
-
 from django.db.models import IntegerField
 
+from django_sqlite_protobuf.descriptors import DescriptorRef
 from django_sqlite_protobuf.proto_view import (
     DynamicFilter,
     FieldFilter,
@@ -56,7 +55,7 @@ from django_sqlite_protobuf.proto_view import (
     ProtoView,
 )
 
-DESCRIPTOR = Path(__file__).parent / "descriptors" / "test.pb"
+DESCRIPTOR = DescriptorRef("test")
 MESSAGE = "test.Record"
 
 

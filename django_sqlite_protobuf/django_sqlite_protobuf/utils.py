@@ -206,10 +206,16 @@ def _inspect_proto_field(
 def _descriptor_bytes(descriptor: "str | os.PathLike | bytes") -> bytes:
     """Normalise a descriptor argument to raw bytes.
 
-    Accepts ``str``, any ``os.PathLike`` (including ``pathlib.PurePosixPath``,
-    which is what Django migrations produce when serialising a
-    ``pathlib.Path``), or raw ``bytes``.
+    Accepts:
+
+    * :class:`~django_sqlite_protobuf.descriptors.DescriptorRef` — resolved
+      from the database (cached per-process).
+    * ``str`` / any ``os.PathLike`` — read from the filesystem.
+    * Raw ``bytes`` — used directly.
     """
+    from django_sqlite_protobuf.descriptors import DescriptorRef
+    if isinstance(descriptor, DescriptorRef):
+        return descriptor.resolve()
     if isinstance(descriptor, (str, os.PathLike)):
         return Path(descriptor).read_bytes()
     return descriptor

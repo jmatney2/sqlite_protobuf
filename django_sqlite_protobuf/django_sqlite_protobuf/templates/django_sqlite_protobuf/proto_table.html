@@ -23,22 +23,20 @@ Optional context variables:
 {% endcomment %}
 
 {% if filter_form_fields %}
-<form method="get" class="d-flex gap-2 flex-wrap align-items-center mb-3">
+<form method="get" class="{{ proto_filter_class|default:'d-flex gap-2 flex-wrap align-items-center mb-3' }}">
   {% for k, v in hidden_params.items %}
   <input type="hidden" name="{{ k }}" value="{{ v }}">
   {% endfor %}
   {% for f in filter_form_fields %}
     {% if f.choices %}
       {% if f.multiple %}
-  <select name="{{ f.name }}" multiple
-          class="form-select form-select-sm"
-          style="min-width:140px">
+  <select name="{{ f.name }}" multiple class="{{ proto_select_class|default:'form-select form-select-sm' }}">
         {% for choice_val, choice_label in f.choices %}
     <option value="{{ choice_val }}"{% if choice_val in f.selected %}selected{% endif %}>{{ choice_label }}</option>
         {% endfor %}
   </select>
       {% else %}
-  <select name="{{ f.name }}" class="form-select form-select-sm" style="min-width:140px">
+  <select name="{{ f.name }}" class="{{ proto_select_class|default:'form-select form-select-sm' }}">
     <option value="">{{ f.label }}</option>
         {% for choice_val, choice_label in f.choices %}
     <option value="{{ choice_val }}"{% if f.selected == choice_val %} selected{% endif %}>{{ choice_label }}</option>
@@ -50,12 +48,11 @@ Optional context variables:
          name="{{ f.name }}"
          value="{{ f.selected|default:'' }}"
          placeholder="{{ f.label }}"
-         class="form-control form-control-sm"
-         style="width:180px">
+         class="{{ proto_input_class|default:'form-control form-control-sm' }}">
     {% endif %}
   {% endfor %}
-  <button type="submit" class="btn btn-sm btn-outline-primary">Search</button>
-  <a href="?" class="btn btn-sm btn-outline-secondary">Clear</a>
+  <button type="submit" class="{{ proto_btn_search_class|default:'btn btn-sm btn-outline-primary' }}">Search</button>
+  <a href="?" class="{{ proto_btn_clear_class|default:'btn btn-sm btn-outline-secondary' }}">Clear</a>
 </form>
 {% endif %}
 
