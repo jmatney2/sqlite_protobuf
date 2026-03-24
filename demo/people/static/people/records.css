@@ -1,0 +1,159 @@
+/*
+ * records.css — Custom stylesheet for the Records (ProtoView) demo page.
+ *
+ * No framework dependency. Demonstrates how to style proto_table.html
+ * by passing custom class names via the template include's `with` clause.
+ */
+
+/* ── Variables ───────────────────────────────────────────────────── */
+:root {
+  --bg:           #f5f5f5;
+  --surface:      #ffffff;
+  --border:       #d0d0d0;
+  --text:         #1a1a1a;
+  --muted:        #6b7280;
+  --primary:      #2563eb;
+  --primary-dark: #1d4ed8;
+  --danger:       #dc2626;
+  --danger-dark:  #b91c1c;
+  --nav-bg:       #1e1e1e;
+  --branch-a:     #1d4ed8;
+  --branch-b:     #15803d;
+  --radius:       6px;
+  --shadow:       0 1px 3px rgba(0,0,0,.10);
+}
+
+/* ── Reset ───────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body   { background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, sans-serif; }
+a      { color: var(--primary); }
+code   { background: #e9ecef; padding: .1em .35em; border-radius: 3px; font-size: .85em; }
+pre    { font-size: .8rem; white-space: pre-wrap; overflow-x: auto; }
+
+/* ── Navigation ──────────────────────────────────────────────────── */
+.demo-nav          { background: var(--nav-bg); padding: .75rem 0; margin-bottom: 1.5rem; }
+.demo-nav__inner   { max-width: 1100px; margin: 0 auto; padding: 0 1rem;
+                     display: flex; align-items: center; gap: 1.5rem; }
+.demo-nav__brand   { color: #fff; font-weight: 700; font-size: 1rem; }
+.demo-nav__links   { display: flex; gap: 1rem; }
+.demo-nav__link    { color: rgba(255,255,255,.5); text-decoration: none; font-size: .9rem; }
+.demo-nav__link:hover,
+.demo-nav__link--active { color: #fff; }
+
+/* ── Page wrapper ────────────────────────────────────────────────── */
+.demo-page { max-width: 1100px; margin: 0 auto; padding: 0 1rem 2rem; }
+
+/* ── Controls bar ────────────────────────────────────────────────── */
+.demo-controls        { display: flex; align-items: center; gap: .75rem;
+                        flex-wrap: wrap; margin-bottom: 1.25rem; }
+.demo-controls form   { display: flex; gap: .5rem; align-items: center; }
+.demo-counter         { margin-left: auto; color: var(--muted); font-size: .85rem; }
+
+/* ── Buttons ─────────────────────────────────────────────────────── */
+.demo-btn {
+  display: inline-block; padding: .3rem .75rem; border-radius: var(--radius);
+  border: 1px solid transparent; font-size: .82rem; cursor: pointer;
+  text-decoration: none; white-space: nowrap; line-height: 1.4;
+  font-family: inherit;
+}
+.demo-btn--primary  { background: var(--primary);  color: #fff; border-color: var(--primary); }
+.demo-btn--primary:hover { background: var(--primary-dark); border-color: var(--primary-dark); }
+.demo-btn--danger   { background: transparent; color: var(--danger); border-color: var(--danger); }
+.demo-btn--danger:hover { background: var(--danger); color: #fff; }
+.demo-btn--active   { background: #4b5563; color: #fff; border-color: #4b5563; }
+.demo-btn--outline  { background: transparent; color: #4b5563; border-color: #9ca3af; }
+.demo-btn--outline:hover { background: #f3f4f6; }
+
+select.demo-select {
+  padding: .3rem .5rem; border: 1px solid var(--border); border-radius: var(--radius);
+  font-size: .82rem; background: #fff; font-family: inherit;
+}
+
+/* ── Card ────────────────────────────────────────────────────────── */
+.demo-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow); margin-bottom: 1.25rem;
+}
+.demo-card__header {
+  padding: .6rem .9rem; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+  font-weight: 600; font-size: .9rem;
+}
+.demo-card__hint    { color: var(--muted); font-size: .78rem; font-weight: normal; }
+.demo-card__body    { padding: .9rem; }
+.demo-card__footer  { padding: .6rem .9rem; border-top: 1px solid var(--border);
+                      color: var(--muted); font-size: .78rem; }
+
+/* ── Small label badge (e.g. "record_views.py") ──────────────────── */
+.demo-label {
+  display: inline-block; padding: .1em .4em; border-radius: 3px;
+  border: 1px solid var(--border); background: #f9fafb;
+  color: var(--muted); font-size: .7rem; font-weight: normal; margin-left: .4rem;
+}
+/* Count bubble */
+.demo-count {
+  display: inline-block; padding: .1em .5em; border-radius: 999px;
+  background: #6b7280; color: #fff; font-size: .75rem;
+  font-weight: 600; margin-left: .35rem; vertical-align: middle;
+}
+
+/* ── Tabs ────────────────────────────────────────────────────────── */
+.demo-tabs { display: flex; gap: .4rem; flex-wrap: wrap; padding: .5rem .75rem; }
+
+/* ── Two-column panel grid ───────────────────────────────────────── */
+.demo-panels {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; margin-bottom: 1.25rem;
+}
+@media (max-width: 680px) { .demo-panels { grid-template-columns: 1fr; } }
+.demo-panels .demo-card { margin-bottom: 0; }
+
+/* ── Details / accordion (no JS) ────────────────────────────────── */
+.demo-details {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow); margin-bottom: .5rem;
+}
+.demo-details summary {
+  padding: .65rem .9rem; cursor: pointer; font-size: .9rem;
+  list-style: none; display: flex; align-items: center; gap: .5rem;
+}
+.demo-details summary::-webkit-details-marker { display: none; }
+.demo-details summary::before {
+  content: "▶"; font-size: .6rem; color: var(--muted); transition: transform .15s;
+}
+.demo-details[open] > summary::before { transform: rotate(90deg); }
+.demo-details__body { padding: .75rem .9rem; border-top: 1px solid var(--border); }
+.demo-details__body p   { margin-bottom: .6rem; }
+.demo-details__body pre { background: #f8f9fa; padding: .75rem; border-radius: 4px; margin: .5rem 0; }
+
+/* ── Proto table ─────────────────────────────────────────────────── */
+.records-table {
+  width: 100%; border-collapse: collapse; font-size: .85rem;
+}
+.records-table th,
+.records-table td { padding: .45rem .65rem; text-align: left; border-bottom: 1px solid var(--border); }
+.records-table thead tr  { background: #f9fafb; }
+.records-table tbody tr:hover { background: #f5f7ff; }
+
+.records-sort-link       { color: inherit; text-decoration: none; }
+.records-sort-link:hover { text-decoration: underline; }
+.records-null            { color: var(--muted); font-style: italic; }
+
+/* Badge cells */
+.records-table .badge          { display: inline-block; padding: .15em .5em;
+                                  border-radius: 999px; font-size: .75rem;
+                                  font-weight: 600; color: #fff; }
+.records-table .badge.branch-a { background: var(--branch-a); }
+.records-table .badge.branch-b { background: var(--branch-b); }
+
+/* ── Filter form (inside proto_table) ───────────────────────────── */
+.records-filter {
+  display: flex; gap: .5rem; flex-wrap: wrap;
+  align-items: center; padding: .65rem .9rem;
+}
+.records-filter input[type="text"],
+.records-filter select {
+  padding: .3rem .5rem; border: 1px solid var(--border);
+  border-radius: var(--radius); font-size: .82rem;
+  background: #fff; font-family: inherit;
+}
+.records-filter select[multiple] { min-height: 66px; }
