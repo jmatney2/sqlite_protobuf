@@ -77,11 +77,8 @@ def _random_address(classes):
     return addr
 
 
-def make_random_person() -> bytes:
-    classes = _get_classes()
-    Person = classes["Person"]
-
-    p = Person()
+def _random_person(classes):
+    p = classes["Person"]()
     p.name = f"{random.choice(_FIRST_NAMES)} {random.choice(_LAST_NAMES)}"
     p.age = random.randint(18, 75)
     p.score = round(random.uniform(1.0, 10.0), 2)
@@ -93,21 +90,19 @@ def make_random_person() -> bytes:
     p.created_at = int(time.time()) - random.randint(0, 365 * 24 * 3600)
     p.created_ts.seconds = int(time.time()) - random.randint(0, 365 * 24 * 3600)
     p.large_id = random.randint(0, 2**48)
-
-    num_tags = random.randint(1, 4)
-    p.tags.extend(random.sample(_TAGS, num_tags))
-
+    p.tags.extend(random.sample(_TAGS, random.randint(1, 4)))
     p.metadata["views"] = random.randint(0, 10_000)
     p.metadata["likes"] = random.randint(0, 1_000)
-
     if random.random() > 0.5:
         p.nickname = random.choice(_NICKNAMES)
-
-    num_prev = random.randint(0, 2)
-    for _ in range(num_prev):
+    for _ in range(random.randint(0, 2)):
         p.previous_addresses.append(_random_address(classes))
+    return p
 
-    return p.SerializeToString()
+
+def make_random_person() -> bytes:
+    classes = _get_classes()
+    return _random_person(classes).SerializeToString()
 
 
 def make_random_record() -> bytes:
@@ -123,10 +118,14 @@ def make_random_record() -> bytes:
         a = classes["BranchA"]()
         a.label = random.choice(_LABELS_A)
         a.value = random.randint(1, 100)
+        a.person.CopyFrom(_random_person(classes))
         r.branch_a.CopyFrom(a)
     else:
         b = classes["BranchB"]()
         b.label = random.choice(_LABELS_B)
         b.category = random.choice(_CATEGORIES)
+        b.count = random.randint(0, 500)
+        b.score = round(random.uniform(0.0, 100.0), 2)
+        b.enabled = random.random() > 0.3
         r.branch_b.CopyFrom(b)
     return r.SerializeToString()

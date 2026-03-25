@@ -39,120 +39,210 @@
       {% csrf_token %}
       <button type="submit" class="demo-btn demo-btn--danger">Clear All</button>
     </form>
+    {% if saved_configs %}
+    <form method="get" action="{% url 'records' %}" class="demo-config-load">
+      <select name="config" class="demo-select">
+        {% for cfg in saved_configs %}
+        <option value="{{ cfg.name }}"{% if cfg.name == active_config_name %} selected{% endif %}>{{ cfg.name }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="demo-btn demo-btn--outline">Load</button>
+    </form>
+    {% if active_config_name %}
+    <form method="post" action="{% url 'delete_named_config' %}"
+          onsubmit="return confirm('Delete saved config \'{{ active_config_name }}\'?')">
+      {% csrf_token %}
+      <input type="hidden" name="name" value="{{ active_config_name }}">
+      <button type="submit" class="demo-btn demo-btn--danger">Delete Config</button>
+    </form>
+    {% endif %}
+    {% endif %}
     <span class="demo-counter">{{ total_scoped }} shown · {{ total_all }} total</span>
   </div>
 
-  <!-- View tabs -->
-  <div class="demo-card">
-    <div class="demo-tabs">
-      {% for key, label in view_labels.items %}
-      <a href="?view={{ key }}"
-         class="demo-btn {% if active_view == key %}demo-btn--active{% else %}demo-btn--outline{% endif %}">
-        {{ label }}
-      </a>
-      {% endfor %}
+  <!-- Column picker -->
+  <details class="demo-details">
+    <summary>Configure Columns <span class="demo-count">{{ selected_col_names|length }}</span></summary>
+    <div class="demo-details__body">
+      <form method="post" action="{% url 'save_record_columns' %}" id="col-picker-form">
+        {% csrf_token %}
+        <input type="hidden" name="cols" id="cols-hidden">
+        <div class="col-picker-wrap">
+
+          <!-- Left panel: all available fields, grouped -->
+          <div class="col-picker-browser">
+            <input type="text" id="col-search" class="col-picker-search"
+                   placeholder="Search fields…" autocomplete="off">
+            <div class="col-picker-groups" id="col-picker-groups">
+              {% for group in column_groups %}
+              <div class="col-picker-group">
+                <div class="col-picker-group__label">{{ group.label }}</div>
+                {% for col in group.columns %}
+                <label class="col-picker-field" data-name="{{ col.name }}">
+                  <input type="checkbox" class="col-picker-check" value="{{ col.name }}"
+                         {% if col.name in selected_col_names %}checked{% endif %}>
+                  {{ col.verbose_name }}
+                </label>
+                {% endfor %}
+              </div>
+              {% endfor %}
+            </div>
+          </div>
+
+          <!-- Right panel: selected columns in order -->
+          <div class="col-picker-order">
+            <div class="col-picker-order__header">
+              Column order <span class="demo-count" id="order-count">{{ selected_col_names|length }}</span>
+            </div>
+            <ul class="col-order-list" id="col-order-list">
+              {% for col in selected_columns %}
+              <li class="col-order-item" draggable="true" data-name="{{ col.name }}">
+                <span class="col-picker__handle">⠿</span>
+                <span class="col-order-label">{{ col.verbose_name }}</span>
+                <button type="button" class="col-order-remove" data-name="{{ col.name }}"
+                        aria-label="Remove {{ col.verbose_name }}">✕</button>
+              </li>
+              {% endfor %}
+            </ul>
+            <p class="col-order-empty" {% if selected_columns %}style="display:none"{% endif %}>
+              Check fields on the left to add them here.
+            </p>
+          </div>
+
+        </div><!-- /col-picker-wrap -->
+        <div class="col-picker-actions">
+          <button type="submit" class="demo-btn demo-btn--primary">Apply</button>
+        </div>
+      </form>
+      <form method="post" action="{% url 'save_named_config' %}" class="col-picker-save">
+        {% csrf_token %}
+        <input type="text" name="name" class="col-picker-name-input"
+               placeholder="Config name…" value="{{ active_config_name|default:'' }}"
+               required maxlength="100" autocomplete="off">
+        <button type="submit" class="demo-btn demo-btn--outline">Save to server</button>
+      </form>
+      <script>
+(function () {
+  var orderList  = document.getElementById('col-order-list');
+  var orderEmpty = document.querySelector('.col-order-empty');
+  var orderCount = document.getElementById('order-count');
+  var dragging   = null;
+
+  function updateCount() {
+    var n = orderList.querySelectorAll('li').length;
+    orderCount.textContent = n;
+    orderEmpty.style.display = n ? 'none' : '';
+  }
+
+  // Left panel: checkbox → add/remove from right panel
+  document.getElementById('col-picker-groups').addEventListener('change', function (e) {
+    if (e.target.type !== 'checkbox') return;
+    var name  = e.target.value;
+    var label = e.target.closest('label').textContent.trim();
+    if (e.target.checked) {
+      addOrderItem(name, label);
+    } else {
+      var li = orderList.querySelector('li[data-name="' + name + '"]');
+      if (li) li.remove();
+    }
+    updateCount();
+  });
+
+  function addOrderItem(name, label) {
+    var li = document.createElement('li');
+    li.className = 'col-order-item';
+    li.draggable = true;
+    li.dataset.name = name;
+    li.innerHTML =
+      '<span class="col-picker__handle">⠿</span>' +
+      '<span class="col-order-label">' + label + '</span>' +
+      '<button type="button" class="col-order-remove" data-name="' + name + '" ' +
+              'aria-label="Remove ' + label + '">✕</button>';
+    orderList.appendChild(li);
+  }
+
+  // Right panel: remove button
+  orderList.addEventListener('click', function (e) {
+    var btn = e.target.closest('.col-order-remove');
+    if (!btn) return;
+    var name = btn.dataset.name;
+    btn.closest('li').remove();
+    var cb = document.querySelector('.col-picker-check[value="' + name + '"]');
+    if (cb) cb.checked = false;
+    updateCount();
+  });
+
+  // Right panel: drag to reorder
+  orderList.addEventListener('dragstart', function (e) {
+    dragging = e.target.closest('li');
+    setTimeout(function () { dragging.style.opacity = '0.4'; }, 0);
+  });
+  orderList.addEventListener('dragend', function () {
+    dragging.style.opacity = '';
+    dragging = null;
+  });
+  orderList.addEventListener('dragover', function (e) {
+    e.preventDefault();
+    var li = e.target.closest('li');
+    if (!li || li === dragging) return;
+    var r = li.getBoundingClientRect();
+    orderList.insertBefore(dragging, e.clientY > r.top + r.height / 2 ? li.nextSibling : li);
+  });
+
+  // Left panel: search filter
+  document.getElementById('col-search').addEventListener('input', function () {
+    var q = this.value.toLowerCase();
+    document.querySelectorAll('.col-picker-field').forEach(function (label) {
+      label.style.display = label.textContent.toLowerCase().includes(q) ? '' : 'none';
+    });
+    document.querySelectorAll('.col-picker-group').forEach(function (group) {
+      var visible = Array.from(group.querySelectorAll('.col-picker-field'))
+                         .some(function (l) { return l.style.display !== 'none'; });
+      group.style.display = visible ? '' : 'none';
+    });
+  });
+
+  // Serialize on submit
+  document.getElementById('col-picker-form').addEventListener('submit', function () {
+    var names = Array.from(orderList.querySelectorAll('li')).map(function (li) {
+      return li.dataset.name;
+    });
+    document.getElementById('cols-hidden').value = names.join(',');
+  });
+}());
+      </script>
     </div>
-  </div>
+  </details>
 
   <!-- Main table -->
   <div class="demo-card">
     <div class="demo-card__header">
-      <span>
-        {% for key, label in view_labels.items %}{% if key == active_view %}{{ label }}{% endif %}{% endfor %}
-        <span class="demo-count">{{ total_scoped }}</span>
-      </span>
-      <span class="demo-card__hint">Columns from <code>ProtoView.columns</code> · click headers to sort</span>
+      <span>Records <span class="demo-count">{{ total_scoped }}</span></span>
+      <span class="demo-card__hint">click headers to sort</span>
     </div>
-    {% include "django_sqlite_protobuf/proto_table.html" with
-        proto_table_class="records-table"
-        proto_table_container_class=""
-        proto_thead_class=""
-        proto_sort_link_class="records-sort-link"
-        proto_null_class="records-null"
-        proto_filter_class="records-filter"
-        proto_btn_search_class="demo-btn demo-btn--primary"
-        proto_btn_clear_class="demo-btn demo-btn--outline"
-        proto_empty_message="No records yet — generate some above." %}
+    {% if rows %}
+    {% include "django_sqlite_protobuf/proto_table.html" %}
+    {% else %}
+    <p class="demo-empty">No records yet — generate some above.</p>
+    {% endif %}
   </div>
 
-  <!-- View definition + serialised config -->
-  <div class="demo-panels">
-    <div class="demo-card">
-      <div class="demo-card__header">
-        View Definition
-        <span class="demo-label">record_views.py</span>
-      </div>
-      <div class="demo-card__body" style="padding:0">
-        {% if active_view == "all" %}
-        <pre style="padding:.75rem .9rem">class AllRecordsView(ProtoView):
-    descriptor   = DescriptorRef("test")
-    message_type = "test.Record"
-
-    columns = [
-        OneofColumn("source_type", "source",
-                    badges={"branch_a": "branch-a",
-                            "branch_b": "branch-b"}),
-        ProtoColumn("branch_a_label", "branch_a.label"),
-        ProtoColumn("branch_a_value", "branch_a.value",
-                    output_field=IntegerField()),
-        ProtoColumn("branch_b_label", "branch_b.label"),
-        ProtoColumn("branch_b_category", "branch_b.category"),
-    ]</pre>
-        {% elif active_view == "branch_a" %}
-        <pre style="padding:.75rem .9rem">class BranchAView(ProtoView):
-    descriptor   = DescriptorRef("test")
-    message_type = "test.Record"
-
-    fixed_filters = [OneofFilter("source", "branch_a")]
-    columns = [
-        ProtoColumn("label", "branch_a.label"),
-        ProtoColumn("value", "branch_a.value",
-                    output_field=IntegerField()),
-    ]
-    dynamic_filters = [
-        DynamicFilter("search", "branch_a.label",
-                      lookup="icontains"),
-        DynamicFilter("min_value", "branch_a.value",
-                      lookup="gte"),
-    ]</pre>
-        {% else %}
-        <pre style="padding:.75rem .9rem">class BranchBView(ProtoView):
-    descriptor   = DescriptorRef("test")
-    message_type = "test.Record"
-
-    fixed_filters = [OneofFilter("source", "branch_b")]
-    columns = [
-        ProtoColumn("label", "branch_b.label"),
-        ProtoColumn("category", "branch_b.category"),
-    ]
-    dynamic_filters = [
-        DynamicFilter("search", "branch_b.label",
-                      lookup="icontains"),
-        DynamicFilter("category", "branch_b.category",
-                      lookup="exact"),
-    ]</pre>
-        {% endif %}
-      </div>
+  <!-- Serialised config -->
+  <div class="demo-card">
+    <div class="demo-card__header">
+      Serialised Config
+      <span class="demo-label">view.serialize_config()</span>
     </div>
-
-    <div class="demo-card">
-      <div class="demo-card__header">
-        Serialised Config
-        <span class="demo-label">view.serialize_config()</span>
-      </div>
-      <div class="demo-card__body" style="padding:0">
-        <pre style="padding:.75rem .9rem">{{ config_json }}</pre>
-      </div>
-      <div class="demo-card__footer">
-        Save this JSON per-user to let them choose their own columns and
-        filters. Restore with
-        <code>{{ active_view|capfirst }}View.from_config(config)</code> —
-        fixed filters are always preserved from the class definition.
-      </div>
+    <div class="demo-card__body" style="padding:0">
+      <pre style="padding:.75rem .9rem">{{ config_json }}</pre>
+    </div>
+    <div class="demo-card__footer">
+      Save this JSON per-user to restore the current column selection.
+      Restore with <code>RecordView.from_config(config)</code>.
     </div>
   </div>
 
-  <!-- How it works (details/summary — no JS required) -->
+  <!-- How it works -->
   <details class="demo-details">
     <summary>oneOf: NULL for inactive branches + COALESCE</summary>
     <div class="demo-details__body">
@@ -167,10 +257,6 @@ SELECT COALESCE(
     protobuf_extract(proto_data, :d, 'test.Record', 'branch_b.label')
 )  -- "north"  ✓
 FROM people_recordentry;</pre>
-      <p>
-        The <strong>Combined Label</strong> column is computed exactly this way,
-        via Django's <code>Coalesce()</code> applied after <code>proto_view.apply()</code>.
-      </p>
     </div>
   </details>
 
@@ -180,8 +266,7 @@ FROM people_recordentry;</pre>
       <p>
         <code>protobuf_which_oneof(data, descriptor, message_type, oneof_name)</code>
         returns the active field name as a string, or <code>NULL</code>.
-        The <strong>Type</strong> column and branch-type filter in <em>All Records</em>
-        mode use this via <code>OneofColumn</code>:
+        The <strong>Type</strong> column uses this via <code>OneofColumn</code>:
       </p>
       <pre>SELECT protobuf_which_oneof(
     proto_data, :d, 'test.Record', 'source'

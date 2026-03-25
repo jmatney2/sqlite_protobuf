@@ -42,11 +42,15 @@ message Person {
 message BranchA {
     string label = 1;
     int32 value = 2;
+    Person person = 3;
 }
 
 message BranchB {
     string label = 1;
     string category = 2;
+    int32 count = 3;
+    double score = 4;
+    bool enabled = 5;
 }
 
 message Record {

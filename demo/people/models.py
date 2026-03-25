@@ -17,6 +17,26 @@ class PersonRecord(models.Model):
         ordering = ["-inserted_at"]
 
 
+class SavedRecordConfig(models.Model):
+    """
+    A named, server-side snapshot of a RecordView column selection.
+
+    ``config`` stores the JSON produced by ``RecordView.serialize_config()``
+    so it can be restored via ``RecordView.from_config(config)``.
+    """
+
+    name = models.CharField(max_length=100, unique=True)
+    config = models.JSONField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
+
+
 class RecordEntry(models.Model):
     """
     Stores a single serialised ``test.Record`` protobuf blob.

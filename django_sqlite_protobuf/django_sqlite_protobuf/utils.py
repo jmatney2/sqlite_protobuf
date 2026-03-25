@@ -373,3 +373,257 @@ def proto_table_class(
 
     columns["Meta"] = type("Meta", (), meta_dict)
     return type("ProtoTable", (base_class,), columns)
+
+
+# ---------------------------------------------------------------------------
+# Descriptor-based column auto-generation
+# ---------------------------------------------------------------------------
+
+
+def _to_label(name: str) -> str:
+    """``'branch_a'`` → ``'Branch A'``, ``'source_type'`` → ``'Source Type'``."""
+    return name.replace("_", " ").title()
+
+
+def _collect_leaf_fields(
+    msg_desc,
+    path_prefix: str,
+    label_prefix: str,
+    depth: int,
+    max_depth: int,
+) -> list:
+    """
+    Recursively collect scalar (leaf) fields from a message descriptor.
+
+    Returns a list of ``(annotation_name, field_path, verbose_name)`` tuples.
+    Skips repeated fields, map fields, and sub-messages deeper than *max_depth*.
+    ``google.protobuf.Timestamp`` is treated as a scalar leaf at any depth.
+    """
+    results = []
+    for field_desc in msg_desc.fields:
+        fname = field_desc.name
+        path = f"{path_prefix}.{fname}"
+        ann = path.replace(".", "_")
+
+        is_map = getattr(field_desc, "is_map_field", False) or (
+            field_desc.message_type is not None
+            and field_desc.message_type.GetOptions().map_entry
+        )
+        if is_map or (field_desc.is_repeated and not is_map):
+            continue
+
+        if field_desc.message_type is not None:
+            if field_desc.message_type.full_name == "google.protobuf.Timestamp":
+                results.append((ann, path, f"{label_prefix}: {_to_label(fname)}"))
+            elif depth < max_depth:
+                results.extend(
+                    _collect_leaf_fields(
+                        field_desc.message_type, path, label_prefix, depth + 1, max_depth
+                    )
+                )
+            # else: sub-message exceeds max_depth — skip
+        else:
+            results.append((ann, path, f"{label_prefix}: {_to_label(fname)}"))
+
+    return results
+
+
+def columns_from_descriptor(
+    descriptor,
+    message_type: str,
+    *,
+    max_depth: int = 2,
+    oneof_badges: dict | None = None,
+    include_coalesce: bool = True,
+) -> tuple[list, list]:
+    """
+    Auto-generate :class:`~django_sqlite_protobuf.proto_view.ProtoView` columns
+    and column groups by introspecting a compiled protobuf descriptor.
+
+    Parameters
+    ----------
+    descriptor:
+        Path, raw bytes, or
+        :class:`~django_sqlite_protobuf.descriptors.DescriptorRef` for the
+        compiled ``.pb`` FileDescriptorSet.
+    message_type:
+        Fully-qualified protobuf message name, e.g. ``"mypackage.Record"``.
+    max_depth:
+        Maximum nesting depth to recurse into sub-messages when collecting
+        leaf fields.  Default ``2`` (expands one level of nested messages).
+    oneof_badges:
+        Optional badge CSS classes for
+        :class:`~django_sqlite_protobuf.proto_view.OneofColumn` cells.
+
+        * Nested form (multiple oneofs):
+          ``{oneof_name: {branch_field_name: css_class}}``
+        * Flat form (single oneof, shorthand):
+          ``{branch_field_name: css_class}``
+    include_coalesce:
+        When ``True`` (default), auto-generate a
+        :class:`~django_sqlite_protobuf.proto_view.CoalesceColumn` for every
+        leaf field name that appears in two or more branches of the same
+        ``oneof``.  These are collected in a ``"Combined"`` group.
+
+    Returns
+    -------
+    ``(columns, column_groups)``
+        *columns*
+            Flat list of
+            :class:`~django_sqlite_protobuf.proto_view.OneofColumn`,
+            :class:`~django_sqlite_protobuf.proto_view.ProtoColumn`, and
+            :class:`~django_sqlite_protobuf.proto_view.CoalesceColumn`
+            instances, ordered: oneofs → branch fields → top-level fields →
+            combined.
+        *column_groups*
+            List of ``{"label": str, "columns": [...]}`` dicts suitable for
+            the column-picker UI.
+
+    Example
+    -------
+    ::
+
+        from django_sqlite_protobuf.descriptors import DescriptorRef
+        from django_sqlite_protobuf.utils import columns_from_descriptor
+
+        DESCRIPTOR = DescriptorRef("my_schema")
+        MESSAGE    = "mypackage.Record"
+
+        AVAILABLE_COLUMNS, COLUMN_GROUPS = columns_from_descriptor(
+            DESCRIPTOR, MESSAGE,
+            oneof_badges={"source": {"branch_a": "branch-a", "branch_b": "branch-b"}},
+        )
+        COLUMN_BY_NAME = {col.name: col for col in AVAILABLE_COLUMNS}
+    """
+    # Lazy import to avoid circular dependency (proto_view imports from utils)
+    from .proto_view import CoalesceColumn, OneofColumn, ProtoColumn
+
+    db = _descriptor_bytes(descriptor)
+    pool = _load_pool(db)
+    msg_desc = pool.FindMessageTypeByName(message_type)
+    if msg_desc is None:
+        raise LookupError(
+            f"Message type {message_type!r} not found in descriptor"
+        )
+
+    # Normalise oneof_badges to {oneof_name: {branch: class}}.
+    # Accept flat {branch: class} as shorthand when there is only one oneof.
+    _badges: dict = {}
+    if oneof_badges:
+        first_val = next(iter(oneof_badges.values()), None)
+        if isinstance(first_val, str) and msg_desc.oneofs:
+            # Flat form — wrap under the first (and presumably only) oneof name
+            _badges = {msg_desc.oneofs[0].name: oneof_badges}
+        else:
+            _badges = oneof_badges
+
+    # Map field_name → oneof_desc for quick lookup
+    field_to_oneof: dict = {}
+    for oneof_desc in msg_desc.oneofs:
+        for f in oneof_desc.fields:
+            field_to_oneof[f.name] = oneof_desc
+
+    all_columns: list = []
+    groups: list = []
+
+    # ── 1. OneofColumn per oneof ──────────────────────────────────────────
+    for oneof_desc in msg_desc.oneofs:
+        col = OneofColumn(
+            name=f"{oneof_desc.name}_type",
+            oneof_name=oneof_desc.name,
+            verbose_name=f"{_to_label(oneof_desc.name)} Type",
+            badges=_badges.get(oneof_desc.name),
+        )
+        all_columns.append(col)
+        groups.append({"label": _to_label(oneof_desc.name), "columns": [col]})
+
+    # ── 2. Per-branch leaf ProtoColumns, grouped by branch ────────────────
+    # Also collect leaf paths for CoalesceColumn detection.
+    # Layout: {oneof_name: {branch_fname: {leaf_fname: (ann, path)}}}
+    oneof_branch_map: dict = {}
+
+    for oneof_desc in msg_desc.oneofs:
+        for branch_field in oneof_desc.fields:
+            fname = branch_field.name
+            label_prefix = _to_label(fname)
+
+            is_map = getattr(branch_field, "is_map_field", False) or (
+                branch_field.message_type is not None
+                and branch_field.message_type.GetOptions().map_entry
+            )
+
+            if branch_field.message_type is not None and not is_map and not branch_field.is_repeated:
+                leaves = _collect_leaf_fields(
+                    branch_field.message_type, fname, label_prefix, 1, max_depth
+                )
+            else:
+                # Scalar field directly in the oneof
+                leaves = [(fname, fname, label_prefix)]
+
+            branch_cols = [
+                ProtoColumn(ann, path, verbose_name=verbose)
+                for ann, path, verbose in leaves
+            ]
+            all_columns.extend(branch_cols)
+            groups.append({"label": label_prefix, "columns": branch_cols})
+
+            # Track leaf paths for coalesce detection
+            oname = oneof_desc.name
+            if oname not in oneof_branch_map:
+                oneof_branch_map[oname] = {}
+            oneof_branch_map[oname][fname] = {
+                path.rsplit(".", 1)[-1]: (ann, path)
+                for ann, path, _ in leaves
+            }
+
+    # ── 3. Non-oneof fields at top level ─────────────────────────────────
+    top_level_cols = []
+    for field_desc in msg_desc.fields:
+        fname = field_desc.name
+        if fname in field_to_oneof:
+            continue
+        is_map = getattr(field_desc, "is_map_field", False) or (
+            field_desc.message_type is not None
+            and field_desc.message_type.GetOptions().map_entry
+        )
+        if field_desc.is_repeated or is_map:
+            continue
+        if field_desc.message_type is not None:
+            if field_desc.message_type.full_name == "google.protobuf.Timestamp":
+                top_level_cols.append(
+                    ProtoColumn(fname, fname, verbose_name=_to_label(fname))
+                )
+            elif max_depth > 0:
+                for ann, path, verbose in _collect_leaf_fields(
+                    field_desc.message_type, fname, _to_label(fname), 1, max_depth
+                ):
+                    top_level_cols.append(ProtoColumn(ann, path, verbose_name=verbose))
+        else:
+            top_level_cols.append(ProtoColumn(fname, fname, verbose_name=_to_label(fname)))
+
+    if top_level_cols:
+        all_columns.extend(top_level_cols)
+        groups.append({"label": "General", "columns": top_level_cols})
+
+    # ── 4. CoalesceColumns for leaf names shared across branches ─────────
+    if include_coalesce:
+        coalesce_cols = []
+        for oname, branches in oneof_branch_map.items():
+            if len(branches) < 2:
+                continue
+            branch_leaf_sets = [set(d.keys()) for d in branches.values()]
+            shared = branch_leaf_sets[0].intersection(*branch_leaf_sets[1:])
+            for leaf_name in sorted(shared):
+                paths = [branches[bname][leaf_name][1] for bname in branches]
+                coalesce_cols.append(
+                    CoalesceColumn(
+                        name=f"coalesce_{oname}_{leaf_name}",
+                        paths=paths,
+                        verbose_name=f"{_to_label(leaf_name)} (any)",
+                    )
+                )
+        if coalesce_cols:
+            all_columns.extend(coalesce_cols)
+            groups.append({"label": "Combined", "columns": coalesce_cols})
+
+    return all_columns, groups

@@ -1,19 +1,20 @@
 import json
+from urllib.parse import urlencode
 
-from django.db.models import Avg, FloatField, IntegerField, TextField
-from django.db.models.functions import Coalesce
+from django.db.models import Avg, FloatField, IntegerField
 from django.shortcuts import redirect, render
+from django.urls import reverse
 from django.views.decorators.http import require_POST
 from django_tables2 import RequestConfig
 
 from django_sqlite_protobuf.expressions import ProtobufExtract
 from django_sqlite_protobuf.proto_view import build_proto_view_context
 
-from .models import PersonRecord, RecordEntry
+from .models import PersonRecord, RecordEntry, SavedRecordConfig
 from .proto_helpers import make_random_person, make_random_record
-from .record_views import DESCRIPTOR as RECORD_DESCRIPTOR
-from .record_views import MESSAGE as RECORD_MESSAGE
-from .record_views import VIEW_LABELS, VIEWS
+from .record_views import (
+    COLUMN_BY_NAME, COLUMN_GROUPS, DEFAULT_COLUMN_NAMES, RecordView,
+)
 from .tables import DESCRIPTOR, MESSAGE, PersonTable
 
 
@@ -101,60 +102,71 @@ def clear_all(request):
 
 
 def records(request):
-    """
-    Demonstrates:
-    - ProtoView: fixed filters scope to a oneof branch; dynamic filters let
-      the user search within that scope
-    - OneofColumn: annotates each row with its active branch name, enabling
-      sorting/grouping by type
-    - COALESCE across oneof branches: works because inactive branches now
-      return NULL instead of the proto3 default value
-    - Config serialization: the view's column/filter setup can be round-tripped
-      through JSON, enabling user-saved view configurations
-    """
-    view_name = request.GET.get("view", "all")
-    if view_name not in VIEWS:
-        view_name = "all"
+    # URL param ?config=<name> loads a saved server config (and updates session).
+    config_name = request.GET.get("config")
+    if config_name:
+        try:
+            saved = SavedRecordConfig.objects.get(name=config_name)
+            loaded_view = RecordView.from_config(saved.config)
+            col_names = [col.name for col in loaded_view.columns
+                         if col.name in COLUMN_BY_NAME]
+            request.session["record_col_names"] = col_names
+        except SavedRecordConfig.DoesNotExist:
+            col_names = request.session.get("record_col_names") or list(DEFAULT_COLUMN_NAMES)
+    else:
+        col_names = request.session.get("record_col_names") or list(DEFAULT_COLUMN_NAMES)
 
-    view_cls = VIEWS[view_name]
-    saved_config = request.session.get(f"record_view_config_{view_name}")
-    proto_view = view_cls.from_config(saved_config) if saved_config else view_cls()
+    view = RecordView()
+    view.columns = [COLUMN_BY_NAME[n] for n in col_names]
 
-    # COALESCE extra column: picks the label from whichever branch is active.
-    combined_label_expr = Coalesce(
-        ProtobufExtract(
-            "proto_data", RECORD_DESCRIPTOR, RECORD_MESSAGE, "branch_a.label",
-            output_field=TextField(),
-        ),
-        ProtobufExtract(
-            "proto_data", RECORD_DESCRIPTOR, RECORD_MESSAGE, "branch_b.label",
-            output_field=TextField(),
-        ),
+    ctx = build_proto_view_context(view, RecordEntry.objects.all(), request.GET)
+
+    selected_columns = [COLUMN_BY_NAME[n] for n in col_names]
+    saved_configs = list(SavedRecordConfig.objects.values("name"))
+
+    return render(request, "people/records.html", {
+        **ctx,
+        "column_groups": COLUMN_GROUPS,
+        "selected_columns": selected_columns,
+        "selected_col_names": col_names,
+        "config_json": json.dumps(view.serialize_config(), indent=2),
+        "total_scoped": ctx["total"],
+        "total_all": RecordEntry.objects.count(),
+        "saved_configs": saved_configs,
+        "active_config_name": config_name,
+    })
+
+
+@require_POST
+def save_record_columns(request):
+    cols = request.POST.get("cols", "")
+    col_names = [n for n in cols.split(",") if n in COLUMN_BY_NAME]
+    if col_names:
+        request.session["record_col_names"] = col_names
+    return redirect("records")
+
+
+@require_POST
+def save_named_config(request):
+    name = request.POST.get("name", "").strip()
+    if not name:
+        return redirect("records")
+    col_names = request.session.get("record_col_names") or list(DEFAULT_COLUMN_NAMES)
+    view = RecordView()
+    view.columns = [COLUMN_BY_NAME[n] for n in col_names]
+    SavedRecordConfig.objects.update_or_create(
+        name=name,
+        defaults={"config": view.serialize_config()},
     )
+    return redirect(reverse("records") + "?" + urlencode({"config": name}))
 
-    ctx = build_proto_view_context(
-        proto_view,
-        RecordEntry.objects.all(),
-        request.GET,
-        extra_annotations={"combined_label": combined_label_expr},
-    )
 
-    return render(
-        request,
-        "people/records.html",
-        {
-            **ctx,
-            "proto_view": proto_view,
-            "active_view": view_name,
-            "view_labels": VIEW_LABELS,
-            "extra_columns": [
-                {"name": "combined_label", "verbose_name": "Combined Label", "sortable": True},
-            ],
-            "config_json": json.dumps(proto_view.serialize_config(), indent=2),
-            "total_scoped": ctx["total"],
-            "total_all": RecordEntry.objects.count(),
-        },
-    )
+@require_POST
+def delete_named_config(request):
+    name = request.POST.get("name", "").strip()
+    if name:
+        SavedRecordConfig.objects.filter(name=name).delete()
+    return redirect("records")
 
 
 @require_POST

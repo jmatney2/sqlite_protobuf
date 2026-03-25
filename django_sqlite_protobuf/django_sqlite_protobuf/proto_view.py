@@ -174,6 +174,66 @@ class OneofColumn:
                    badges=d.get("badges"))
 
 
+@dataclass
+class CoalesceColumn:
+    """
+    A column that returns the first non-NULL value across multiple protobuf
+    field paths, using SQL ``COALESCE``.
+
+    The primary use case is showing a "combined" value for a field that appears
+    in several branches of a ``oneof``.  Because inactive oneof branches return
+    ``NULL`` (not the proto3 default), ``COALESCE`` correctly picks the active
+    branch's value.
+
+    Example — show whichever branch's ``label`` is set::
+
+        CoalesceColumn(
+            "combined_label",
+            paths=["branch_a.label", "branch_b.label"],
+            verbose_name="Label",
+        )
+
+    Parameters
+    ----------
+    name:
+        Annotation name on the queryset row.
+    paths:
+        Ordered list of protobuf field paths.  The first non-NULL value wins.
+    output_field:
+        Django field instance controlling the Python type.  ``None`` triggers
+        auto-detection from the first path in the descriptor.
+    verbose_name:
+        Column header label.  Defaults to ``name`` title-cased.
+    sortable:
+        Whether to allow ordering by this column.
+    """
+
+    name: str
+    paths: list
+    output_field: Any = None
+    verbose_name: str = ""
+    sortable: bool = True
+    badges: dict | None = None
+
+    def __post_init__(self) -> None:
+        if not self.verbose_name:
+            self.verbose_name = self.name.replace("_", " ").title()
+
+    def to_dict(self) -> dict:
+        d = {"type": "coalesce", "name": self.name, "paths": list(self.paths),
+             "verbose_name": self.verbose_name, "sortable": self.sortable}
+        if self.badges is not None:
+            d["badges"] = self.badges
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "CoalesceColumn":
+        return cls(name=d["name"], paths=d["paths"],
+                   verbose_name=d.get("verbose_name", ""),
+                   sortable=d.get("sortable", True),
+                   badges=d.get("badges"))
+
+
 # ---------------------------------------------------------------------------
 # Filter descriptors
 # ---------------------------------------------------------------------------
@@ -418,7 +478,12 @@ class ModelDynamicFilter:
 # ProtoView
 # ---------------------------------------------------------------------------
 
-_COLUMN_TYPES = {"proto": ProtoColumn, "oneof": OneofColumn, "model": ModelColumn}
+_COLUMN_TYPES = {
+    "proto": ProtoColumn,
+    "oneof": OneofColumn,
+    "model": ModelColumn,
+    "coalesce": CoalesceColumn,
+}
 _DYNAMIC_FILTER_TYPES = {"proto": DynamicFilter, "model": ModelDynamicFilter}
 
 
@@ -486,7 +551,7 @@ class ProtoView:
     descriptor: str | Path | bytes
     message_type: str
     blob_field: str = "proto_data"
-    columns: list[ProtoColumn | OneofColumn | ModelColumn] = []
+    columns: list[ProtoColumn | OneofColumn | ModelColumn | CoalesceColumn] = []
     fixed_filters: list[OneofFilter | FieldFilter | ModelFilter] = []
     dynamic_filters: list[DynamicFilter | ModelDynamicFilter] = []
 
@@ -538,6 +603,11 @@ class ProtoView:
                 annotations[col.name] = self._extract(col.path, col.output_field)
             elif isinstance(col, OneofColumn):
                 annotations[col.name] = self._which_oneof(col.oneof_name)
+            elif isinstance(col, CoalesceColumn):
+                from django.db.models.functions import Coalesce
+                of = col.output_field or self._auto_output_field(col.paths[0])
+                exprs = [self._extract(p, of) for p in col.paths]
+                annotations[col.name] = Coalesce(*exprs, output_field=of)
 
         # Fixed-filter annotations (may share a name with a column — skip if so)
         for f in self.fixed_filters:

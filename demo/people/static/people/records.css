@@ -126,34 +126,131 @@ select.demo-select {
 .demo-details__body pre { background: #f8f9fa; padding: .75rem; border-radius: 4px; margin: .5rem 0; }
 
 /* ── Proto table ─────────────────────────────────────────────────── */
-.records-table {
+.demo-card table {
   width: 100%; border-collapse: collapse; font-size: .85rem;
 }
-.records-table th,
-.records-table td { padding: .45rem .65rem; text-align: left; border-bottom: 1px solid var(--border); }
-.records-table thead tr  { background: #f9fafb; }
-.records-table tbody tr:hover { background: #f5f7ff; }
+.demo-card th,
+.demo-card td { padding: .45rem .65rem; text-align: left; border-bottom: 1px solid var(--border); }
+.demo-card thead tr  { background: #f9fafb; }
+.demo-card tbody tr:hover { background: #f5f7ff; }
 
-.records-sort-link       { color: inherit; text-decoration: none; }
-.records-sort-link:hover { text-decoration: underline; }
-.records-null            { color: var(--muted); font-style: italic; }
+.demo-card th a       { color: inherit; text-decoration: none; }
+.demo-card th a:hover { text-decoration: underline; }
+.demo-card .text-muted { color: var(--muted); font-style: italic; }
 
 /* Badge cells */
-.records-table .badge          { display: inline-block; padding: .15em .5em;
-                                  border-radius: 999px; font-size: .75rem;
-                                  font-weight: 600; color: #fff; }
-.records-table .badge.branch-a { background: var(--branch-a); }
-.records-table .badge.branch-b { background: var(--branch-b); }
+.demo-card .badge          { display: inline-block; padding: .15em .5em;
+                              border-radius: 999px; font-size: .75rem;
+                              font-weight: 600; color: #fff; }
+.demo-card .badge.branch-a { background: var(--branch-a); }
+.demo-card .badge.branch-b { background: var(--branch-b); }
 
 /* ── Filter form (inside proto_table) ───────────────────────────── */
-.records-filter {
+.demo-card form {
   display: flex; gap: .5rem; flex-wrap: wrap;
   align-items: center; padding: .65rem .9rem;
 }
-.records-filter input[type="text"],
-.records-filter select {
+.demo-card form input[type="text"],
+.demo-card form select {
   padding: .3rem .5rem; border: 1px solid var(--border);
   border-radius: var(--radius); font-size: .82rem;
   background: #fff; font-family: inherit;
 }
-.records-filter select[multiple] { min-height: 66px; }
+.demo-card form select[multiple] { min-height: 66px; }
+.demo-card form button {
+  display: inline-block; padding: .3rem .75rem; border-radius: var(--radius);
+  border: 1px solid var(--primary); font-size: .82rem; cursor: pointer;
+  white-space: nowrap; line-height: 1.4; font-family: inherit;
+  background: var(--primary); color: #fff;
+}
+.demo-card form button:hover { background: var(--primary-dark); border-color: var(--primary-dark); }
+.demo-card form a {
+  display: inline-block; padding: .3rem .75rem; border-radius: var(--radius);
+  border: 1px solid #9ca3af; font-size: .82rem;
+  white-space: nowrap; line-height: 1.4; font-family: inherit;
+  background: transparent; color: #4b5563; text-decoration: none;
+}
+.demo-card form a:hover { background: #f3f4f6; }
+
+/* ── Empty state ─────────────────────────────────────────────────── */
+.demo-empty {
+  padding: 2rem; text-align: center; color: var(--muted); font-size: .9rem;
+}
+
+/* ── Column picker (two-panel) ────────────────────────────────────── */
+.col-picker-wrap {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;
+  margin-bottom: .75rem;
+}
+@media (max-width: 640px) { .col-picker-wrap { grid-template-columns: 1fr; } }
+
+/* Left panel — field browser */
+.col-picker-browser {
+  border: 1px solid var(--border); border-radius: var(--radius);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.col-picker-search {
+  padding: .35rem .6rem; border: none; border-bottom: 1px solid var(--border);
+  font-size: .82rem; font-family: inherit; outline: none; background: #f9fafb;
+}
+.col-picker-groups { overflow-y: auto; max-height: 260px; }
+.col-picker-group { }
+.col-picker-group__label {
+  padding: .3rem .65rem; font-size: .72rem; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--muted); background: #f3f4f6;
+  border-bottom: 1px solid var(--border); position: sticky; top: 0;
+}
+.col-picker-field {
+  display: flex; align-items: center; gap: .45rem;
+  padding: .35rem .65rem; font-size: .83rem; cursor: pointer;
+  border-bottom: 1px solid #f0f0f0;
+}
+.col-picker-field:hover { background: #f0f4ff; }
+.col-picker-check { cursor: pointer; }
+
+/* Right panel — column order */
+.col-picker-order {
+  border: 1px solid var(--border); border-radius: var(--radius);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.col-picker-order__header {
+  padding: .4rem .65rem; font-size: .82rem; font-weight: 600;
+  background: #f9fafb; border-bottom: 1px solid var(--border);
+}
+.col-order-list {
+  list-style: none; overflow-y: auto; max-height: 260px; flex: 1;
+}
+.col-order-item {
+  display: flex; align-items: center; gap: .4rem;
+  padding: .35rem .65rem; font-size: .83rem;
+  border-bottom: 1px solid #f0f0f0; cursor: grab;
+}
+.col-order-item:active { cursor: grabbing; }
+.col-order-item:last-child { border-bottom: none; }
+.col-picker__handle { color: var(--muted); font-size: 1rem; user-select: none; }
+.col-order-label { flex: 1; }
+.col-order-remove {
+  border: none; background: none; cursor: pointer; color: var(--muted);
+  font-size: .85rem; padding: 0 .2rem; line-height: 1;
+}
+.col-order-remove:hover { color: var(--danger); }
+.col-order-empty {
+  padding: 1.5rem .75rem; color: var(--muted); font-size: .83rem;
+  text-align: center; font-style: italic;
+}
+
+/* Actions row below both panels */
+.col-picker-actions { display: flex; gap: .5rem; margin-top: .25rem; }
+
+/* Save-to-server row */
+.col-picker-save {
+  display: flex; gap: .5rem; align-items: center; margin-top: .5rem;
+}
+.col-picker-name-input {
+  padding: .3rem .5rem; border: 1px solid var(--border);
+  border-radius: var(--radius); font-size: .82rem; font-family: inherit;
+  flex: 1; min-width: 0;
+}
+
+/* Load config form in controls bar */
+.demo-config-load { display: flex; gap: .4rem; align-items: center; }

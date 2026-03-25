@@ -1,0 +1,3 @@
+[submodule "grafana_demo/grafana-sqlite-datasource"]
+	path = grafana_demo/grafana-sqlite-datasource
+	url = https://github.com/jmatney2/grafana-sqlite-datasource.git
