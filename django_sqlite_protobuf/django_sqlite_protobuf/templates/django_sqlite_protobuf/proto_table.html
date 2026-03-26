@@ -56,6 +56,24 @@ Optional context variables:
 </form>
 {% endif %}
 
+{% if total_pages > 1 %}
+<div class="{{ proto_pagination_class }}" style="display:flex;gap:4px;align-items:center;margin-top:8px;flex-wrap:wrap">
+  {% if prev_url %}<a href="{{ prev_url }}" style="padding:2px 7px;text-decoration:none;border:1px solid #ccc;border-radius:3px">&laquo;</a>{% else %}<span style="padding:2px 7px;border:1px solid #eee;border-radius:3px;color:#aaa">&laquo;</span>{% endif %}
+  {% for p in page_range %}
+    {% if p %}
+      {% if p == page %}
+  <span style="padding:2px 7px;border:1px solid #888;border-radius:3px;font-weight:bold">{{ p }}</span>
+      {% else %}
+  <a href="{{ page_urls|dict_get:p }}" style="padding:2px 7px;text-decoration:none;border:1px solid #ccc;border-radius:3px">{{ p }}</a>
+      {% endif %}
+    {% else %}
+  <span style="padding:2px 4px;color:#aaa">&hellip;</span>
+    {% endif %}
+  {% endfor %}
+  {% if next_url %}<a href="{{ next_url }}" style="padding:2px 7px;text-decoration:none;border:1px solid #ccc;border-radius:3px">&raquo;</a>{% else %}<span style="padding:2px 7px;border:1px solid #eee;border-radius:3px;color:#aaa">&raquo;</span>{% endif %}
+</div>
+{% endif %}
+
 <div class="{{ proto_table_container_class|default:'table-responsive' }}">
   <table class="{{ proto_table_class|default:'table table-hover table-sm mb-0' }}">
     <thead class="{{ proto_thead_class|default:'table-light' }}">
@@ -120,3 +138,21 @@ Optional context variables:
     </tbody>
   </table>
 </div>
+
+{% if total_pages > 1 %}
+<div class="{{ proto_pagination_class }}" style="display:flex;gap:4px;align-items:center;margin-top:8px;flex-wrap:wrap">
+  {% if prev_url %}<a href="{{ prev_url }}" style="padding:2px 7px;text-decoration:none;border:1px solid #ccc;border-radius:3px">&laquo;</a>{% else %}<span style="padding:2px 7px;border:1px solid #eee;border-radius:3px;color:#aaa">&laquo;</span>{% endif %}
+  {% for p in page_range %}
+    {% if p %}
+      {% if p == page %}
+  <span style="padding:2px 7px;border:1px solid #888;border-radius:3px;font-weight:bold">{{ p }}</span>
+      {% else %}
+  <a href="{{ page_urls|dict_get:p }}" style="padding:2px 7px;text-decoration:none;border:1px solid #ccc;border-radius:3px">{{ p }}</a>
+      {% endif %}
+    {% else %}
+  <span style="padding:2px 4px;color:#aaa">&hellip;</span>
+    {% endif %}
+  {% endfor %}
+  {% if next_url %}<a href="{{ next_url }}" style="padding:2px 7px;text-decoration:none;border:1px solid #ccc;border-radius:3px">&raquo;</a>{% else %}<span style="padding:2px 7px;border:1px solid #eee;border-radius:3px;color:#aaa">&raquo;</span>{% endif %}
+</div>
+{% endif %}

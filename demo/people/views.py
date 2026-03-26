@@ -1,7 +1,10 @@
+import csv
+import io
 import json
 from urllib.parse import urlencode
 
 from django.db.models import Avg, FloatField, IntegerField
+from django.http import StreamingHttpResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_POST
@@ -135,6 +138,46 @@ def records(request):
         "saved_configs": saved_configs,
         "active_config_name": config_name,
     })
+
+
+def records_csv(request):
+    config_name = request.GET.get("config")
+    if config_name:
+        try:
+            saved = SavedRecordConfig.objects.get(name=config_name)
+            loaded_view = RecordView.from_config(saved.config)
+            col_names = [col.name for col in loaded_view.columns
+                         if col.name in COLUMN_BY_NAME]
+        except SavedRecordConfig.DoesNotExist:
+            col_names = request.session.get("record_col_names") or list(DEFAULT_COLUMN_NAMES)
+    else:
+        col_names = request.session.get("record_col_names") or list(DEFAULT_COLUMN_NAMES)
+
+    view = RecordView()
+    view.columns = [COLUMN_BY_NAME[n] for n in col_names]
+
+    qs = view.apply(RecordEntry.objects.all(), request.GET)
+
+    sort = request.GET.get("sort", "")
+    if sort.lstrip("-") in view.sortable_columns():
+        qs = qs.order_by(sort)
+
+    columns = view.columns
+
+    def _rows():
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow([col.verbose_name for col in columns])
+        yield buf.getvalue()
+        for record in qs.iterator(chunk_size=500):
+            buf.seek(0)
+            buf.truncate()
+            writer.writerow([getattr(record, col.name, "") for col in columns])
+            yield buf.getvalue()
+
+    response = StreamingHttpResponse(_rows(), content_type="text/csv")
+    response["Content-Disposition"] = 'attachment; filename="records.csv"'
+    return response
 
 
 @require_POST

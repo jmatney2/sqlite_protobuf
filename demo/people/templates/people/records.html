@@ -218,7 +218,11 @@
   <div class="demo-card">
     <div class="demo-card__header">
       <span>Records <span class="demo-count">{{ total_scoped }}</span></span>
-      <span class="demo-card__hint">click headers to sort</span>
+      <span style="display:flex;align-items:center;gap:1rem">
+        <a href="{% url 'records_csv' %}?{{ request.GET.urlencode }}"
+           class="demo-btn demo-btn--outline" style="font-size:.8rem">&#x21E9; Export CSV</a>
+        <span class="demo-card__hint">click headers to sort</span>
+      </span>
     </div>
     {% if rows %}
     {% include "django_sqlite_protobuf/proto_table.html" %}

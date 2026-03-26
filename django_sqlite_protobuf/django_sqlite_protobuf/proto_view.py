@@ -106,7 +106,7 @@ class ProtoColumn:
     path: str
     output_field: Any = None
     verbose_name: str = ""
-    sortable: bool = True
+    sortable: bool = False
     badges: dict | None = None  # {value: "bg-primary"} → renders a Bootstrap badge
 
     def __post_init__(self) -> None:
@@ -152,7 +152,7 @@ class OneofColumn:
     name: str
     oneof_name: str
     verbose_name: str = ""
-    sortable: bool = True
+    sortable: bool = False
     badges: dict | None = None  # {value: "bg-primary"} → renders a Bootstrap badge
 
     def __post_init__(self) -> None:
@@ -212,7 +212,7 @@ class CoalesceColumn:
     paths: list
     output_field: Any = None
     verbose_name: str = ""
-    sortable: bool = True
+    sortable: bool = False
     badges: dict | None = None
 
     def __post_init__(self) -> None:
@@ -797,6 +797,24 @@ class ProtoView:
 # ---------------------------------------------------------------------------
 
 
+def _compute_page_range(page: int, total_pages: int, window: int = 2) -> list:
+    """Return page numbers to display, with ``None`` as an ellipsis marker."""
+    if total_pages <= 9:
+        return list(range(1, total_pages + 1))
+    pages: set[int] = set()
+    pages.update([1, 2])
+    pages.update(range(max(1, page - window), min(total_pages, page + window) + 1))
+    pages.update([total_pages - 1, total_pages])
+    result: list = []
+    prev: int | None = None
+    for p in sorted(pages):
+        if prev is not None and p - prev > 1:
+            result.append(None)
+        result.append(p)
+        prev = p
+    return result
+
+
 def build_proto_view_context(
     proto_view: "ProtoView",
     queryset,
@@ -805,7 +823,8 @@ def build_proto_view_context(
     sort_param: str = "sort",
     extra_annotations: dict | None = None,
     extra_sort_columns: list[str] | None = None,
-    limit: int = 100,
+    page_size: int = 100,
+    page_param: str = "page",
 ) -> dict:
     """
     Apply *proto_view* to *queryset*, sort, materialise rows, and return a
@@ -840,8 +859,11 @@ def build_proto_view_context(
         provided its keys are implicitly included, so this parameter is only
         needed when sorting a column that comes from elsewhere (e.g. already
         on the model).
-    limit:
-        Maximum number of rows to materialise.  Defaults to 100.
+    page_size:
+        Number of rows per page.  Defaults to 100.
+    page_param:
+        Name of the query-string key that controls the current page.
+        Defaults to ``"page"``.
 
     Returns
     -------
@@ -865,7 +887,23 @@ def build_proto_view_context(
             *params* with the sort key removed; useful for passing filter
             values back to a search form via hidden inputs.
         ``total``
-            Total count of matching rows (before the *limit* slice).
+            Total count of matching rows (before pagination).
+        ``page``
+            Current page number (1-based).
+        ``page_size``
+            Rows per page.
+        ``total_pages``
+            Total number of pages.
+        ``page_range``
+            List of page numbers (and ``None`` for ellipsis) to render in
+            the pagination control.
+        ``page_urls``
+            ``{page_num: url}`` mapping for every page number in
+            *page_range*.
+        ``prev_url``
+            URL for the previous page, or ``""`` on page 1.
+        ``next_url``
+            URL for the next page, or ``""`` on the last page.
 
     Example
     -------
@@ -918,9 +956,18 @@ def build_proto_view_context(
 
     total = qs.count()
 
+    # Pagination
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    try:
+        page = max(1, int(params_flat.get(page_param) or 1))
+    except (ValueError, TypeError):
+        page = 1
+    page = min(page, total_pages)
+    offset = (page - 1) * page_size
+
     columns = proto_view.columns
     rows = []
-    for record in qs[:limit]:
+    for record in qs[offset:offset + page_size]:
         row = {}
         for col in columns:
             row[col.name] = getattr(record, col.name, None)
@@ -930,19 +977,33 @@ def build_proto_view_context(
 
     def _sort_url(col_name: str) -> str:
         new_sort = f"-{col_name}" if sort == col_name else col_name
-        p = {**params_multi, sort_param: new_sort}
+        # Changing sort resets to page 1, so strip page_param.
+        p = {k: v for k, v in params_multi.items() if k != page_param}
+        p[sort_param] = new_sort
         return "?" + urlencode(p, doseq=True)
+
+    def _page_url(p: int) -> str:
+        pars = {**params_multi, page_param: p}
+        return "?" + urlencode(pars, doseq=True)
 
     col_sort_urls = {col.name: _sort_url(col.name) for col in columns}
     for name in extra_names:
         col_sort_urls[name] = _sort_url(name)
 
+    page_range = _compute_page_range(page, total_pages)
+    page_urls = {p: _page_url(p) for p in page_range if p is not None}
+    prev_url = _page_url(page - 1) if page > 1 else ""
+    next_url = _page_url(page + 1) if page < total_pages else ""
+
     active_params = {k: v for k, v in params_flat.items() if k != sort_param}
 
-    # Hidden params: active_params minus filter-field names (they have their
-    # own inputs in the form so we don't want to duplicate them as hidden).
+    # Hidden params: active_params minus filter-field names and page_param
+    # (filter fields have their own inputs; page resets to 1 on new searches).
     filter_names = {df.name for df in proto_view.dynamic_filters}
-    hidden_params = {k: v for k, v in active_params.items() if k not in filter_names}
+    hidden_params = {
+        k: v for k, v in active_params.items()
+        if k not in filter_names and k != page_param
+    }
 
     # Enrich filter_form_fields with current selected value(s) so the template
     # can pre-select options without extra dict lookups.
@@ -963,4 +1024,11 @@ def build_proto_view_context(
         "active_params": active_params,
         "hidden_params": hidden_params,
         "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+        "page_range": page_range,
+        "page_urls": page_urls,
+        "prev_url": prev_url,
+        "next_url": next_url,
     }
