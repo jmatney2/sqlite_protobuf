@@ -51,7 +51,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from django.db import models
+from django.db import models, utils
 
 from .expressions import ProtobufExtract
 
@@ -498,7 +498,12 @@ def columns_from_descriptor(
     # Lazy import to avoid circular dependency (proto_view imports from utils)
     from .proto_view import CoalesceColumn, OneofColumn, ProtoColumn
 
-    db = _descriptor_bytes(descriptor)
+    try:
+        db = _descriptor_bytes(descriptor)
+    except utils.OperationalError as e:
+        print(f"Error loading descriptor: {e}")
+        return [], []
+
     pool = _load_pool(db)
     msg_desc = pool.FindMessageTypeByName(message_type)
     if msg_desc is None:
